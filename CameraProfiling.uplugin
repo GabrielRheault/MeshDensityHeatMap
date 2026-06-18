@@ -3,7 +3,7 @@
 	"Version": 1,
 	"VersionName": "1.0",
 	"FriendlyName": "Camera Profiling",
-	"Description": "Yes Chef camera-grid performance profiler. Editor (Python): generate a NavMesh-aware camera grid, profile in PIE, and view a 2D asset-density heat map. Runtime (C++): in-game camera flythrough that bookmarks an Unreal Insights trace + screenshots per camera, for standalone/packaged/console profiling.",
+	"Description": "Yes Chef camera-grid performance profiler. Editor (C++): generate a NavMesh-aware camera grid, profile in PIE, and view a 2D asset-density heat map. Runtime (C++): in-game camera flythrough that bookmarks an Unreal Insights trace + screenshots per camera, for standalone/packaged/console profiling.",
 	"Category": "Yes Chef",
 	"CreatedBy": "Yes Chef",
 	"CreatedByURL": "",
@@ -20,18 +20,11 @@
 			"Name": "CameraProfilingRuntime",
 			"Type": "Runtime",
 			"LoadingPhase": "Default"
-		}
-	],
-	"Plugins": [
-		{
-			"Name": "PythonScriptPlugin",
-			"Enabled": true,
-			"TargetAllowList": [ "Editor" ]
 		},
 		{
-			"Name": "EditorScriptingUtilities",
-			"Enabled": true,
-			"TargetAllowList": [ "Editor" ]
+			"Name": "CameraProfilingEditor",
+			"Type": "Editor",
+			"LoadingPhase": "Default"
 		}
 	]
 }

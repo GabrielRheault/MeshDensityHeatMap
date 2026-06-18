@@ -1,0 +1,60 @@
+#pragma once
+
+#include "CoreMinimal.h"
+
+class UWorld;
+
+/**
+ * Editor-side operations for the Camera Profiling plugin (C++ port of the old Python tooling).
+ * All methods run on the game thread (menu callbacks / HTTP handlers).
+ */
+class CAMERAPROFILINGEDITOR_API FCameraProfilingTools
+{
+public:
+	/** <ProjectSaved>/CameraProfiling/data (created on demand). */
+	static FString DataDir();
+
+	/** Full "Generate Cameras" action: export scene data + top-down render, build the grid at
+	 *  [GridX, GridY] (<=0 uses the configured GridResolution), then spawn the cameras. */
+	static void GenerateCameras(int32 GridX, int32 GridY);
+
+	/** Scan the level -> scene_data.json (bounds, navmesh volumes, density grid w/ true triangles,
+	 *  asset clusters). Returns the written path, or empty on failure. */
+	static FString ExportSceneData();
+
+	/** Orthographic top-down render -> map_topdown.png (+ map_topdown.json AABB) for the overlay. */
+	static bool CaptureTopdown();
+
+	/** scene_data.json -> camera_positions.json (jittered grid over navmesh/scene, aimed at clusters). */
+	static FString GenerateCameraGrid(int32 GridX, int32 GridY);
+
+	/** Read camera_positions.json, validate ground/navmesh per point, spawn GridCam_* actors, and
+	 *  write camera_grid.json (resolved transforms + profiling params) for the runtime subsystem. */
+	static int32 SpawnCameras();
+
+	/** Resolve the ground Z under (X, Y) using the configured placement method. Unset on miss. */
+	static TOptional<double> ResolveGroundZ(UWorld* World, double X, double Y, double NominalZ);
+
+	// --- Phase 2: heat map ---
+	/** Build density_heatmap.html from scene_data.json (+ overlay) and optionally open it. */
+	static bool WriteHeatmap(bool bOpenBrowser);
+
+	/** Re-scan the level (export + top-down) WITHOUT touching cameras, then rebuild + open the heat map. */
+	static void RefreshHeatmapData();
+
+	/** Select the static-mesh placements inside the cell [Min, Max] (discrete actors + individual
+	 *  instances) and return a JSON per-mesh breakdown (heaviest by triangles first). */
+	static FString InspectCell(double MinX, double MinY, double Size);
+
+	/** Move the active level-editor viewport to look at the cell center (ground-framed). */
+	static void GotoCell(double X, double Y);
+
+	// --- Phase 3: profiling ---
+	/** Write camera_grid.json from the current cameras, arm the runtime subsystem, and start PIE
+	 *  so the unified per-camera profiler runs (trace + screenshot per camera). */
+	static void ProfileFromCameras();
+
+private:
+	/** The editor world, or nullptr. */
+	static UWorld* EditorWorld();
+};

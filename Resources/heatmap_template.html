@@ -1,117 +1,4 @@
-"""
-generate_heatmap.py  --  build a 2D asset-density heat map (HTML) from scene_data.json.
-
-Reads the exported scene data (density grid + navmesh volumes + bounds) and, if present,
-camera_positions.json, and writes density_heatmap.html -- a SELF-CONTAINED file (all data
-inlined) you can just double-click to open in any browser. No server needed.
-
-Run from the Tools -> Yes Chef -> Camera Profiling menu, or standalone: python generate_heatmap.py
-
-Notes:
-    - For a FULL heat map (incl. sparse areas) run 'Generate Cameras' once (it exports the
-      scene incl. the "density_grid"). Without it, this falls back to the dense "clusters" only.
-    - Top-down view: horizontal = world X, vertical = world Y (+Y up). Cameras and density
-      share the same coordinates, so camera dots line up with the density they face.
-
-Output paths are derived from this file's location (-> <Project>/Saved/CameraProfiling/data).
-"""
-
-import json
-import os
-
-# Paths derived from this file: .../Plugins/CameraProfiling/Content/Python -> project root x4 up
-_HERE = os.path.dirname(os.path.abspath(__file__))
-_PROJECT_ROOT = os.path.abspath(os.path.join(_HERE, os.pardir, os.pardir, os.pardir, os.pardir))
-_DATA_DIR = os.path.join(_PROJECT_ROOT, "Saved", "CameraProfiling", "data").replace("\\", "/")
-
-CONFIG = {
-    "data_dir": _DATA_DIR,
-    "scene_data_file": "scene_data.json",
-    "camera_positions_file": "camera_positions.json",
-    "output_file": "density_heatmap.html",
-    "canvas_size": 1000,   # px for the longer axis of the plot
-    "show_cameras": True,
-    "show_navmesh": True,
-    "log_scale": True,     # density is usually skewed; log makes mid-range readable
-    # Localhost bridge for the "Go to this cell" button (must match goto_server.CONFIG).
-    "goto_host": "127.0.0.1",
-    "goto_port": 30080,
-}
-
-
-def generate(cfg):
-    data_dir = cfg["data_dir"]
-    scene_path = os.path.join(data_dir, cfg["scene_data_file"])
-    if not os.path.isfile(scene_path):
-        raise FileNotFoundError(f"{scene_path} not found. Run Export (in UE) first.")
-
-    with open(scene_path, "r") as f:
-        scene = json.load(f)
-
-    # Cameras: prefer the profiling manifest (camera_traces.json) -- those have a .utrace +
-    # screenshot path so clicking a camera can show its trace. Fall back to camera_positions.json
-    # (planned grid, no traces) if no profiling has run yet.
-    cams = []
-    have_traces = False
-    if cfg.get("show_cameras", True):
-        manifest_path = os.path.join(data_dir, "camera_traces.json")
-        cam_path = os.path.join(data_dir, cfg["camera_positions_file"])
-        # Use the profiling manifest only if it's at least as new as camera_positions.json.
-        # If the grid was regenerated after profiling, camera_positions.json is newer and the
-        # manifest (old profiled cameras/traces) is stale -> fall back to the fresh positions.
-        use_manifest = os.path.isfile(manifest_path) and (
-            not os.path.isfile(cam_path)
-            or os.path.getmtime(manifest_path) >= os.path.getmtime(cam_path))
-        if use_manifest:
-            with open(manifest_path, "r") as f:
-                cams = json.load(f).get("cameras", [])
-            have_traces = True
-        elif os.path.isfile(cam_path):
-            with open(cam_path, "r") as f:
-                cams = json.load(f).get("cameras", [])
-
-    # Optional top-down map overlay (rendered by capture_topdown): an image + the world AABB it covers.
-    map_meta = None
-    map_path = os.path.join(data_dir, "map_topdown.json")
-    if os.path.isfile(map_path):
-        try:
-            with open(map_path, "r") as f:
-                map_meta = json.load(f)
-        except Exception:
-            map_meta = None
-
-    payload = {
-        "bounds": scene.get("bounds"),
-        "map": map_meta,                                      # {image, min:[x,y], max:[x,y]} or None
-        "density": scene.get("density_grid"),                 # {cell, bins:[[ix,iy,count],...]} or None
-        "clusters": scene.get("clusters", []),                # fallback when density is missing
-        "navmesh": scene.get("navmesh_volumes", []) if cfg.get("show_navmesh", True) else [],
-        "cameras": cams,
-        "have_traces": have_traces,
-        "opts": {"canvas": int(cfg.get("canvas_size", 1000)),
-                 "log": bool(cfg.get("log_scale", True)),
-                 "show_cameras": bool(cfg.get("show_cameras", True)),
-                 "show_navmesh": bool(cfg.get("show_navmesh", True)),
-                 "goto": f"http://{cfg.get('goto_host', '127.0.0.1')}:{int(cfg.get('goto_port', 30080))}"},
-    }
-
-    html = _HTML_TEMPLATE.replace("/*__DATA__*/", json.dumps(payload))
-    out_path = os.path.join(data_dir, cfg["output_file"])
-    os.makedirs(data_dir, exist_ok=True)
-    with open(out_path, "w", encoding="utf-8") as f:
-        f.write(html)
-
-    n_bins = len(payload["density"]["bins"]) if payload["density"] else 0
-    print(f"[heatmap] wrote {out_path}")
-    print(f"[heatmap] {n_bins} density bins, {len(payload['clusters'])} clusters, "
-          f"{len(cams)} cameras, {len(payload['navmesh'])} navmesh volume(s).")
-    if n_bins == 0:
-        print("[heatmap] NOTE: no density_grid in scene_data.json -- re-run Export for the full "
-              "heat map (showing clusters only for now).")
-    return out_path
-
-
-_HTML_TEMPLATE = r"""<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -140,7 +27,7 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
   <label>Metric
     <select id="metricSel">
       <option value="0">Instances</option>
-      <option value="1">Vertices</option>
+      <option value="1">Triangles</option>
       <option value="2">Draw calls (est.)</option>
     </select>
   </label>
@@ -178,7 +65,7 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
     <div style="height:14px"></div>
     <div class="stat" style="color:#d6d9dd"><b>Selected cell</b> &nbsp;<span style="color:#9aa0a8">(click a cell)</span></div>
     <div class="stat">Instances: <b id="selInst">-</b></div>
-    <div class="stat">Vertices: <b id="selVerts">-</b></div>
+    <div class="stat">Triangles: <b id="selVerts">-</b></div>
     <div class="stat">Draw calls (est.): <b id="selDraws">-</b></div>
     <div class="stat">Rank (this metric): <b id="selRank">-</b></div>
     <div class="stat">% of densest: <b id="selPct">-</b></div>
@@ -226,7 +113,7 @@ cbNav.checked = opts.show_navmesh !== false && (DATA.navmesh||[]).length > 0;
 
 let metricIdx = 0;  // 0 = instances, 1 = vertices, 2 = draws
 const metricSel = document.getElementById('metricSel');
-const METRIC_LABELS = ['Instances', 'Vertices', 'Draw calls'];
+const METRIC_LABELS = ['Instances', 'Triangles', 'Draw calls'];
 // Old scene_data.json only had [ix,iy,instances]; if there's no metrics list, vertices/draws are 0.
 const hasMetrics = !!(DATA.density && DATA.density.metrics);
 
@@ -634,9 +521,9 @@ function runInspect(){
     .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
     .then(rows => {
       if (!rows || !rows.length){ msg.textContent = 'No meshes found in this cell.'; return; }
-      msg.textContent = 'In this cell — heaviest meshes (by vertices):';
+      msg.textContent = 'In this cell — heaviest meshes (by triangles):';
       list.innerHTML = rows.map(r =>
-        `<div class="stat" style="color:#d6d9dd">${r.mesh}: <b>${r.vertices.toLocaleString()}</b> v`
+        `<div class="stat" style="color:#d6d9dd">${r.mesh}: <b>${r.triangles.toLocaleString()}</b> tris`
         + ` <span style="color:#9aa0a8">(${r.count.toLocaleString()}×)</span></div>`).join('');
     })
     .catch(err => {
@@ -657,8 +544,3 @@ draw();
 </script>
 </body>
 </html>
-"""
-
-
-if __name__ == "__main__":
-    generate(CONFIG)
