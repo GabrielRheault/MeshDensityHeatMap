@@ -413,8 +413,11 @@ bool FCameraProfilingTools::CaptureTopdown()
 	}
 
 	// pitch -90 (straight down), yaw 90 (orient so the PNG lines up with the heat-map grid).
+	// Transient throwaway actor: don't let a one-shot render capture dirty/save the level.
+	FActorSpawnParameters SpawnParams;
+	SpawnParams.ObjectFlags |= RF_Transient;
 	ASceneCapture2D* Cap = World->SpawnActor<ASceneCapture2D>(
-		FVector(CX, CY, MaxZ + 50000.0), FRotator(-90.0, 90.0, 0.0));
+		FVector(CX, CY, MaxZ + 50000.0), FRotator(-90.0, 90.0, 0.0), SpawnParams);
 	if (!Cap)
 	{
 		return false;
@@ -449,7 +452,7 @@ bool FCameraProfilingTools::CaptureTopdown()
 		UE_LOG(LogCameraProfilingEditor, Log, TEXT("[topdown] wrote map_topdown.png (%dpx, span %.0fuu)."), Px, Span);
 	}
 
-	World->EditorDestroyActor(Cap, /*bShouldModifyLevel=*/true);
+	World->EditorDestroyActor(Cap, /*bShouldModifyLevel=*/false);
 	return bOk;
 }
 

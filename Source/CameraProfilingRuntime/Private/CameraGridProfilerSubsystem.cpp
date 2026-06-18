@@ -2,8 +2,10 @@
 
 #include "Camera/CameraActor.h"
 #include "Engine/Engine.h"
+#include "Engine/GameViewportClient.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
+#include "HighResScreenshot.h"
 #include "Kismet/GameplayStatics.h"
 #include "UnrealClient.h"
 
@@ -21,6 +23,26 @@
 #include "Serialization/JsonWriter.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogCameraProfile, Log, All);
+
+namespace
+{
+	/** Screenshot at WxH to an exact path via the high-res path so the resolution setting is honored. */
+	void RequestShotAt(const FString& Path, int32 W, int32 H)
+	{
+		FViewport* Viewport = (GEngine && GEngine->GameViewport) ? GEngine->GameViewport->Viewport : nullptr;
+		if (Viewport && W > 0 && H > 0)
+		{
+			FHighResScreenshotConfig& Config = GetHighResScreenshotConfig();
+			Config.SetResolution(W, H, 1.0f);
+			Config.FilenameOverride = Path;
+			Viewport->TakeHighResScreenShot();
+		}
+		else
+		{
+			FScreenshotRequest::RequestScreenshot(Path, /*bShowUI=*/false, /*bAddFilenameSuffix=*/false);
+		}
+	}
+}
 
 bool UCameraGridProfilerSubsystem::ShouldCreateSubsystem(UObject* Outer) const
 {
@@ -145,8 +167,10 @@ void UCameraGridProfilerSubsystem::BeginRun()
 	const bool bExternalTrace = (FCString::Strifind(Cmd, TEXT("-trace=")) != nullptr) || FParse::Param(Cmd, TEXT("trace"));
 	if (!bExternalTrace && GEngine)
 	{
-		const FString TracePath = FPaths::Combine(OutDir, TEXT("profile.utrace"));
-		// NOTE: unquoted path (Trace.File treats a quoted path as relative). Assumes no spaces.
+		// NOTE: unquoted, forward-slash path (Trace.File treats a quoted path as relative, and a
+		// backslash path can be mis-parsed). Assumes no spaces.
+		FString TracePath = FPaths::Combine(OutDir, TEXT("profile.utrace"));
+		TracePath.ReplaceInline(TEXT("\\"), TEXT("/"));
 		GEngine->Exec(World, *FString::Printf(TEXT("Trace.File %s %s"), *TracePath, *Channels));
 		bSelfTrace = true;
 		UE_LOG(LogCameraProfile, Display, TEXT("[CameraProfile] started trace -> %s"), *TracePath);
@@ -191,8 +215,9 @@ void UCameraGridProfilerSubsystem::CaptureCurrent()
 		GEngine->Exec(World, TEXT("memreport -full"));
 	}
 
-	const FString Shot = FPaths::Combine(OutDir, FString::Printf(TEXT("camera_%03d.png"), Index));
-	FScreenshotRequest::RequestScreenshot(Shot, /*bShowUI=*/false, /*bAddFilenameSuffix=*/false);
+	FString Shot = FPaths::Combine(OutDir, FString::Printf(TEXT("camera_%03d.png"), Index));
+	Shot.ReplaceInline(TEXT("\\"), TEXT("/"));
+	RequestShotAt(Shot, ScreenshotResX, ScreenshotResY);
 
 	UE_LOG(LogCameraProfile, Display, TEXT("[CameraProfile] camera %d: bookmark + screenshot."), Index);
 }

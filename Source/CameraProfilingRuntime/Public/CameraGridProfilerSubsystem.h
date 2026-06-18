@@ -16,8 +16,8 @@ struct FProfileCamera
 /**
  * In-game camera-grid profiler. Runs in a STANDALONE / packaged game (no editor, no Python).
  *
- * Enabled only when launched with -RunCameraProfile. Reads camera_positions.json (path from
- * -CameraProfileData=, else <ProjectSaved>/CameraProfiling/data/camera_positions.json), then
+ * Enabled only when launched with -RunCameraProfile. Reads camera_grid.json (path from
+ * -CameraProfileData=, else <ProjectSaved>/CameraProfiling/data/camera_grid.json), then
  * flies the player view through each camera and, per camera, drops an Unreal Insights bookmark
  * ("camera_###") + a screenshot + a memreport. One continuous trace for the whole pass.
  *

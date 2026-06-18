@@ -8,8 +8,10 @@
 #include "LevelEditorViewport.h"
 #include "Camera/CameraActor.h"
 #include "Engine/Engine.h"
+#include "Engine/GameViewportClient.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
+#include "HighResScreenshot.h"
 #include "Kismet/GameplayStatics.h"
 #include "UnrealClient.h"
 
@@ -20,6 +22,27 @@
 #include "Serialization/JsonWriter.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogCameraProfilingProfiler, Log, All);
+
+namespace
+{
+	/** Screenshot at WxH to an exact path. Uses the high-res path (honors resolution) when a game
+	 *  viewport exists (PIE/standalone); falls back to a viewport-res grab in editor-only mode. */
+	void RequestShotAt(UWorld* /*World*/, const FString& Path, int32 W, int32 H)
+	{
+		FViewport* Viewport = (GEngine && GEngine->GameViewport) ? GEngine->GameViewport->Viewport : nullptr;
+		if (Viewport && W > 0 && H > 0)
+		{
+			FHighResScreenshotConfig& Config = GetHighResScreenshotConfig();
+			Config.SetResolution(W, H, 1.0f);
+			Config.FilenameOverride = Path;
+			Viewport->TakeHighResScreenShot();
+		}
+		else
+		{
+			FScreenshotRequest::RequestScreenshot(Path, /*bShowUI=*/false, /*bAddFilenameSuffix=*/false);
+		}
+	}
+}
 
 FCameraProfilingProfiler& FCameraProfilingProfiler::Get()
 {
@@ -211,18 +234,20 @@ void FCameraProfilingProfiler::Aim(const FTransform& Target)
 
 void FCameraProfilingProfiler::Capture(int32 CameraIndex)
 {
-	// Per-camera trace. NOTE: Trace.File needs an UNQUOTED forward-slash path (a quoted path is read
-	// as relative). The engine refuses to overwrite, so delete a stale file first.
-	const FString TracePath = FString::Printf(TEXT("%s/camera_%03d.utrace"), *TraceDir, CameraIndex);
+	// Per-camera trace. NOTE: Trace.File needs an UNQUOTED, forward-slash path (a quoted path is read
+	// as relative). Force forward slashes; the engine refuses to overwrite, so delete a stale file first.
+	FString TracePath = FString::Printf(TEXT("%s/camera_%03d.utrace"), *TraceDir, CameraIndex);
+	TracePath.ReplaceInline(TEXT("\\"), TEXT("/"));
 	if (IFileManager::Get().FileExists(*TracePath))
 	{
 		IFileManager::Get().Delete(*TracePath);
 	}
 	Exec(*FString::Printf(TEXT("Trace.File %s %s"), *TracePath, *Channels));
-	Exec(TEXT("memreport -full"));
+	// NOTE: no memreport here -- it stalls the game thread (~2s) and, run inside the live trace, would
+	// corrupt this camera's timing. One snapshot is taken at the end (Finish), with no trace active.
 
 	const FString ShotPath = FString::Printf(TEXT("%s/camera_%03d.png"), *ShotDir, CameraIndex);
-	FScreenshotRequest::RequestScreenshot(ShotPath, /*bShowUI=*/false, /*bAddFilenameSuffix=*/false);
+	RequestShotAt(World.Get(), ShotPath, ShotX, ShotY);
 }
 
 ACameraActor* FCameraProfilingProfiler::NearestPieCamera(const FVector& Location) const
@@ -251,6 +276,8 @@ void FCameraProfilingProfiler::Exec(const TCHAR* Command)
 void FCameraProfilingProfiler::Finish()
 {
 	Exec(TEXT("Trace.Stop")); // safety: ensure no trace left running
+	// One memory snapshot now that no trace is active, so its ~2s stall pollutes nothing.
+	Exec(TEXT("memreport -full"));
 	if (bPie && LevelEditor && LevelEditor->IsInPlayInEditor())
 	{
 		LevelEditor->EditorRequestEndPlay();
