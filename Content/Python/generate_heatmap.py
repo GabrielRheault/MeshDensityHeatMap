@@ -1,0 +1,664 @@
+"""
+generate_heatmap.py  --  build a 2D asset-density heat map (HTML) from scene_data.json.
+
+Reads the exported scene data (density grid + navmesh volumes + bounds) and, if present,
+camera_positions.json, and writes density_heatmap.html -- a SELF-CONTAINED file (all data
+inlined) you can just double-click to open in any browser. No server needed.
+
+Run from the Tools -> Yes Chef -> Camera Profiling menu, or standalone: python generate_heatmap.py
+
+Notes:
+    - For a FULL heat map (incl. sparse areas) run 'Generate Cameras' once (it exports the
+      scene incl. the "density_grid"). Without it, this falls back to the dense "clusters" only.
+    - Top-down view: horizontal = world X, vertical = world Y (+Y up). Cameras and density
+      share the same coordinates, so camera dots line up with the density they face.
+
+Output paths are derived from this file's location (-> <Project>/Saved/CameraProfiling/data).
+"""
+
+import json
+import os
+
+# Paths derived from this file: .../Plugins/CameraProfiling/Content/Python -> project root x4 up
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_PROJECT_ROOT = os.path.abspath(os.path.join(_HERE, os.pardir, os.pardir, os.pardir, os.pardir))
+_DATA_DIR = os.path.join(_PROJECT_ROOT, "Saved", "CameraProfiling", "data").replace("\\", "/")
+
+CONFIG = {
+    "data_dir": _DATA_DIR,
+    "scene_data_file": "scene_data.json",
+    "camera_positions_file": "camera_positions.json",
+    "output_file": "density_heatmap.html",
+    "canvas_size": 1000,   # px for the longer axis of the plot
+    "show_cameras": True,
+    "show_navmesh": True,
+    "log_scale": True,     # density is usually skewed; log makes mid-range readable
+    # Localhost bridge for the "Go to this cell" button (must match goto_server.CONFIG).
+    "goto_host": "127.0.0.1",
+    "goto_port": 30080,
+}
+
+
+def generate(cfg):
+    data_dir = cfg["data_dir"]
+    scene_path = os.path.join(data_dir, cfg["scene_data_file"])
+    if not os.path.isfile(scene_path):
+        raise FileNotFoundError(f"{scene_path} not found. Run Export (in UE) first.")
+
+    with open(scene_path, "r") as f:
+        scene = json.load(f)
+
+    # Cameras: prefer the profiling manifest (camera_traces.json) -- those have a .utrace +
+    # screenshot path so clicking a camera can show its trace. Fall back to camera_positions.json
+    # (planned grid, no traces) if no profiling has run yet.
+    cams = []
+    have_traces = False
+    if cfg.get("show_cameras", True):
+        manifest_path = os.path.join(data_dir, "camera_traces.json")
+        cam_path = os.path.join(data_dir, cfg["camera_positions_file"])
+        # Use the profiling manifest only if it's at least as new as camera_positions.json.
+        # If the grid was regenerated after profiling, camera_positions.json is newer and the
+        # manifest (old profiled cameras/traces) is stale -> fall back to the fresh positions.
+        use_manifest = os.path.isfile(manifest_path) and (
+            not os.path.isfile(cam_path)
+            or os.path.getmtime(manifest_path) >= os.path.getmtime(cam_path))
+        if use_manifest:
+            with open(manifest_path, "r") as f:
+                cams = json.load(f).get("cameras", [])
+            have_traces = True
+        elif os.path.isfile(cam_path):
+            with open(cam_path, "r") as f:
+                cams = json.load(f).get("cameras", [])
+
+    # Optional top-down map overlay (rendered by capture_topdown): an image + the world AABB it covers.
+    map_meta = None
+    map_path = os.path.join(data_dir, "map_topdown.json")
+    if os.path.isfile(map_path):
+        try:
+            with open(map_path, "r") as f:
+                map_meta = json.load(f)
+        except Exception:
+            map_meta = None
+
+    payload = {
+        "bounds": scene.get("bounds"),
+        "map": map_meta,                                      # {image, min:[x,y], max:[x,y]} or None
+        "density": scene.get("density_grid"),                 # {cell, bins:[[ix,iy,count],...]} or None
+        "clusters": scene.get("clusters", []),                # fallback when density is missing
+        "navmesh": scene.get("navmesh_volumes", []) if cfg.get("show_navmesh", True) else [],
+        "cameras": cams,
+        "have_traces": have_traces,
+        "opts": {"canvas": int(cfg.get("canvas_size", 1000)),
+                 "log": bool(cfg.get("log_scale", True)),
+                 "show_cameras": bool(cfg.get("show_cameras", True)),
+                 "show_navmesh": bool(cfg.get("show_navmesh", True)),
+                 "goto": f"http://{cfg.get('goto_host', '127.0.0.1')}:{int(cfg.get('goto_port', 30080))}"},
+    }
+
+    html = _HTML_TEMPLATE.replace("/*__DATA__*/", json.dumps(payload))
+    out_path = os.path.join(data_dir, cfg["output_file"])
+    os.makedirs(data_dir, exist_ok=True)
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write(html)
+
+    n_bins = len(payload["density"]["bins"]) if payload["density"] else 0
+    print(f"[heatmap] wrote {out_path}")
+    print(f"[heatmap] {n_bins} density bins, {len(payload['clusters'])} clusters, "
+          f"{len(cams)} cameras, {len(payload['navmesh'])} navmesh volume(s).")
+    if n_bins == 0:
+        print("[heatmap] NOTE: no density_grid in scene_data.json -- re-run Export for the full "
+              "heat map (showing clusters only for now).")
+    return out_path
+
+
+_HTML_TEMPLATE = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Asset Density Heat Map</title>
+<style>
+  body { margin: 0; background: #14161a; color: #d6d9dd; font: 13px/1.4 system-ui, sans-serif; }
+  header { padding: 10px 14px; border-bottom: 1px solid #2a2e35; display: flex; gap: 18px; align-items: center; flex-wrap: wrap; }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; }
+  label { user-select: none; cursor: pointer; }
+  #wrap { padding: 14px; display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+  #stage { position: relative; }
+  canvas { background: #0c0d10; border: 1px solid #2a2e35; border-radius: 4px; }
+  #readout { position: absolute; top: 8px; left: 8px; background: rgba(0,0,0,.6); padding: 4px 8px;
+             border-radius: 4px; pointer-events: none; font-variant-numeric: tabular-nums; white-space: pre; }
+  #side { min-width: 180px; }
+  .legend { height: 16px; width: 200px; border: 1px solid #2a2e35; border-radius: 3px; }
+  .row { display: flex; justify-content: space-between; width: 200px; color: #9aa0a8; margin-top: 3px; }
+  .stat { margin: 2px 0; color: #9aa0a8; }
+  .stat b { color: #d6d9dd; }
+  .swatch { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; vertical-align:middle; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Asset Heat Map</h1>
+  <label>Metric
+    <select id="metricSel">
+      <option value="0">Instances</option>
+      <option value="1">Vertices</option>
+      <option value="2">Draw calls (est.)</option>
+    </select>
+  </label>
+  <label title="Map color by log(value) so sparse/medium/dense areas are distinguishable instead of everything but the hottest cells looking the same."><input type="checkbox" id="cbLog"> Balance colors</label>
+  <label><input type="checkbox" id="cbCam"> Cameras</label>
+  <label><input type="checkbox" id="cbNav"> NavMesh</label>
+  <label><input type="checkbox" id="cbMap"> Map</label>
+  <label title="Heat opacity over the map">Heat <input type="range" id="heatOp" min="0" max="100" value="65" style="width:70px;vertical-align:middle"></label>
+  <span id="mapAlign" title="Align the map image to the grid if it's mirrored/rotated">
+    <label><input type="checkbox" id="cbFlipH"> FlipH</label>
+    <label><input type="checkbox" id="cbFlipV"> FlipV</label>
+    <button id="btnRot">Rot 0&deg;</button>
+  </span>
+  <span style="margin-left:auto;color:#9aa0a8">scroll = zoom &nbsp;&middot;&nbsp; drag = pan &nbsp;&middot;&nbsp; double-click = reset</span>
+</header>
+<div id="wrap">
+  <div id="stage">
+    <canvas id="cv"></canvas>
+    <div id="readout"></div>
+  </div>
+  <div id="side">
+    <div class="stat"><b id="legTitle">Instances</b> / cell</div>
+    <div class="legend" id="legend"></div>
+    <div class="row"><span id="legMin">0</span><span id="legMax">max</span></div>
+    <div style="height:12px"></div>
+    <div class="stat"><span class="swatch" style="background:#fff;border:1px solid #000"></span>Camera (line = facing)</div>
+    <div class="stat"><span class="swatch" style="background:#ff5d5d;border-radius:0"></span>NavMesh bounds</div>
+    <div style="height:12px"></div>
+    <div class="stat">Grid cell (LOD): <b id="sLod">-</b> uu</div>
+    <div class="stat">Cells shown: <b id="sBins">-</b></div>
+    <div class="stat">Max / cell: <b id="sMax">-</b></div>
+    <div class="stat">Cameras: <b id="sCam">-</b></div>
+    <div class="stat">World X: <b id="sX">-</b></div>
+    <div class="stat">World Y: <b id="sY">-</b></div>
+    <div style="height:14px"></div>
+    <div class="stat" style="color:#d6d9dd"><b>Selected cell</b> &nbsp;<span style="color:#9aa0a8">(click a cell)</span></div>
+    <div class="stat">Instances: <b id="selInst">-</b></div>
+    <div class="stat">Vertices: <b id="selVerts">-</b></div>
+    <div class="stat">Draw calls (est.): <b id="selDraws">-</b></div>
+    <div class="stat">Rank (this metric): <b id="selRank">-</b></div>
+    <div class="stat">% of densest: <b id="selPct">-</b></div>
+    <div class="stat">Center (X, Y): <b id="selCenter">-</b></div>
+    <div class="stat">Cell size: <b id="selSize">-</b> uu</div>
+    <button id="selGoto" style="display:none;margin-top:6px;cursor:pointer">Go to this cell in editor</button>
+    <div class="stat" id="selGotoMsg" style="color:#9aa0a8;margin-top:4px;display:none"></div>
+    <button id="selInspect" style="display:none;margin-top:4px;cursor:pointer">Select + analyze cell in editor</button>
+    <div class="stat" id="selInspectMsg" style="color:#9aa0a8;margin-top:4px;display:none"></div>
+    <div id="selInspectList"></div>
+    <div style="height:14px"></div>
+    <div class="stat" style="color:#d6d9dd"><b>Selected camera</b> &nbsp;<span style="color:#9aa0a8">(click a dot)</span></div>
+    <div class="stat">Index: <b id="camIdx">-</b></div>
+    <div class="stat">Frame rate: <b id="camFps">-</b></div>
+    <div class="stat">Location: <b id="camLoc">-</b></div>
+    <button id="camGoto" style="display:none;margin:4px 0;cursor:pointer">Go to this camera in editor</button>
+    <div class="stat" id="camGotoMsg" style="color:#9aa0a8;margin-bottom:4px;display:none"></div>
+    <img id="camShot" alt="" style="display:none;max-width:200px;width:200px;border:1px solid #2a2e35;border-radius:3px;margin:6px 0">
+    <div class="stat" style="word-break:break-all">Trace: <span id="camTrace" style="color:#9aa0a8">-</span></div>
+    <button id="camCopy" style="display:none;margin-top:4px;cursor:pointer">Copy trace path</button>
+    <div class="stat" id="camHint" style="color:#9aa0a8;margin-top:4px;display:none">Paste into Unreal Insights &rarr; Open Trace File.</div>
+  </div>
+</div>
+<script>
+const DATA = /*__DATA__*/;
+
+// ---- colormap (dark-blue -> cyan -> green -> yellow -> red) ----
+const STOPS = [[12,16,40],[33,102,172],[64,196,210],[102,194,86],[245,221,70],[224,69,40]];
+function colormap(t){
+  t = Math.max(0, Math.min(1, t));
+  const f = t * (STOPS.length - 1);
+  const i = Math.floor(f), k = f - i;
+  const a = STOPS[i], b = STOPS[Math.min(i+1, STOPS.length-1)];
+  return `rgb(${Math.round(a[0]+(b[0]-a[0])*k)},${Math.round(a[1]+(b[1]-a[1])*k)},${Math.round(a[2]+(b[2]-a[2])*k)})`;
+}
+
+const opts = DATA.opts || {};
+const GOTO = opts.goto || '';   // localhost bridge base URL for "Go to this cell"
+const cbLog = document.getElementById('cbLog');
+const cbCam = document.getElementById('cbCam');
+const cbNav = document.getElementById('cbNav');
+cbLog.checked = !!opts.log;
+cbCam.checked = opts.show_cameras !== false && (DATA.cameras||[]).length > 0;
+cbNav.checked = opts.show_navmesh !== false && (DATA.navmesh||[]).length > 0;
+
+let metricIdx = 0;  // 0 = instances, 1 = vertices, 2 = draws
+const metricSel = document.getElementById('metricSel');
+const METRIC_LABELS = ['Instances', 'Vertices', 'Draw calls'];
+// Old scene_data.json only had [ix,iy,instances]; if there's no metrics list, vertices/draws are 0.
+const hasMetrics = !!(DATA.density && DATA.density.metrics);
+
+// --- top-down map overlay ---
+const cbMap = document.getElementById('cbMap');
+const heatOp = document.getElementById('heatOp');
+const cbFlipH = document.getElementById('cbFlipH');
+const cbFlipV = document.getElementById('cbFlipV');
+const btnRot = document.getElementById('btnRot');
+let mapRot = 0;
+let mapImg = null;
+if (DATA.map && DATA.map.image){
+  mapImg = new Image();
+  mapImg.onload = () => draw();
+  mapImg.src = DATA.map.image;   // relative to the HTML (same data/ folder)
+  cbMap.checked = true;
+} else {
+  cbMap.checked = false;
+  document.getElementById('mapAlign').style.display = 'none';
+  heatOp.parentElement.style.display = 'none';
+}
+
+const bounds = DATA.bounds;
+const minX = bounds.min[0], minY = bounds.min[1], maxX = bounds.max[0], maxY = bounds.max[1];
+const spanX = Math.max(1, maxX - minX), spanY = Math.max(1, maxY - minY);
+
+const LONG = opts.canvas || 1000;
+let plotW, plotH;
+if (spanX >= spanY) { plotW = LONG; plotH = Math.round(LONG * spanY / spanX); }
+else { plotH = LONG; plotW = Math.round(LONG * spanX / spanY); }
+const MARGIN = 1;
+
+const cv = document.getElementById('cv');
+cv.width = plotW + MARGIN*2; cv.height = plotH + MARGIN*2;
+const ctx = cv.getContext('2d');
+const sx = plotW / spanX, sy = plotH / spanY;
+
+function toScreen(wx, wy){
+  // flip X (match UE top-down view orientation) and flip Y so +Y is up
+  return [ MARGIN + (maxX - wx) * sx, MARGIN + (maxY - wy) * sy ];
+}
+
+// ---- density LODs (zoom-based subdivision) ----
+// The export bins assets at the FINEST cell; coarser LODs are sums of finer cells.
+// Levels run coarse(base) -> ... -> fine, each 2x finer than the previous.
+const FINE = (DATA.density && DATA.density.bins) ? DATA.density.bins : null;
+const finestCell = DATA.density ? DATA.density.cell : 0;
+const baseCell = (DATA.density && DATA.density.base_cell) ? DATA.density.base_cell : finestCell;
+
+// Each fine bin is [ix, iy, instances, vertices, draws]; coarser LODs sum each metric, and we
+// track a separate max per metric (so the legend/colors rescale when you switch metric).
+function buildLod(factor){
+  const m = new Map();
+  const maxes = [0, 0, 0];
+  if (FINE){
+    for (const row of FINE){
+      const k = Math.floor(row[0]/factor) + ',' + Math.floor(row[1]/factor);
+      let cell = m.get(k);
+      if (!cell){ cell = [0, 0, 0]; m.set(k, cell); }
+      cell[0] += row[2] || 0; cell[1] += row[3] || 0; cell[2] += row[4] || 0;
+      for (let i = 0; i < 3; i++) if (cell[i] > maxes[i]) maxes[i] = cell[i];
+    }
+  }
+  return { cell: finestCell * factor, map: m, maxes: maxes };
+}
+// Aggregation factors as powers of 2 from base down to finest, e.g. base/finest=8 -> [8,4,2,1]
+// => cells [base, base/2, base/4, base/8] (3 subdivisions).
+const FACTORS = [];
+if (FINE){ for (let f = Math.max(1, Math.round(baseCell/finestCell)); f >= 1; f = Math.floor(f/2)) FACTORS.push(f); }
+const LODS = FACTORS.map(buildLod);
+// Pick the LOD by on-screen cell size: use the FINEST level whose cells are still >= TARGET_PX.
+// This subdivides as you zoom in (cells stay a comfortable size) and is robust to scene scale,
+// instead of relying on magic zoom numbers.
+const TARGET_PX = 16;
+function currentLod(){
+  if (!LODS.length) return null;
+  let chosen = LODS[0];                 // LODS: coarse -> fine
+  for (const lod of LODS){
+    if (lod.cell * sx * zoom >= TARGET_PX) chosen = lod;  // still big enough -> can go finer
+    else break;
+  }
+  return chosen;
+}
+
+function norm(c, mx){
+  if (mx <= 0) return 0;
+  return cbLog.checked ? Math.log1p(c) / Math.log1p(mx) : c / mx;
+}
+
+// ---- view transform (zoom + pan), applied on top of the base screen coords ----
+let zoom = 1, panX = 0, panY = 0;
+function V(p){ return [panX + p[0]*zoom, panY + p[1]*zoom]; }            // base screen -> view
+function invV(vx, vy){ return [(vx - panX)/zoom, (vy - panY)/zoom]; }    // view -> base screen
+
+// Screen rect for the grid cell (ix,iy) at cell size cs -- built from two opposite world
+// corners so it stays correct regardless of axis flips. Returns [x, y, w, h].
+function cellRect(ix, iy, cs){
+  const [ax, ay] = V(toScreen(ix*cs, iy*cs));
+  const [bx, by] = V(toScreen((ix+1)*cs, (iy+1)*cs));
+  return [Math.min(ax,bx), Math.min(ay,by), Math.abs(bx-ax), Math.abs(by-ay)];
+}
+
+let selected = null;     // {wx, wy} world point of the last cell click (resolved at current LOD)
+let selectedCam = null;  // the clicked camera object (from DATA.cameras)
+
+// legend gradient (static)
+(function(){
+  const g = [];
+  for (let i=0;i<=10;i++) g.push(colormap(i/10) + ' ' + (i*10) + '%');
+  document.getElementById('legend').style.background = 'linear-gradient(90deg,' + g.join(',') + ')';
+  document.getElementById('sCam').textContent = (DATA.cameras||[]).length;
+})();
+
+function drawMap(){
+  if (!mapImg || !mapImg.complete || !mapImg.naturalWidth) return;
+  const m = DATA.map;
+  const [ax, ay] = V(toScreen(m.min[0], m.min[1]));
+  const [bx, by] = V(toScreen(m.max[0], m.max[1]));   // map covers this world AABB
+  const rx = Math.min(ax,bx), ry = Math.min(ay,by), rw = Math.abs(bx-ax), rh = Math.abs(by-ay);
+  ctx.save();
+  ctx.translate(rx + rw/2, ry + rh/2);                 // align/flip the image to the grid
+  ctx.rotate(mapRot * Math.PI / 180);
+  ctx.scale(cbFlipH.checked ? -1 : 1, cbFlipV.checked ? -1 : 1);
+  const swap = (mapRot === 90 || mapRot === 270);
+  const dw = swap ? rh : rw, dh = swap ? rw : rh;
+  ctx.drawImage(mapImg, -dw/2, -dh/2, dw, dh);
+  ctx.restore();
+}
+
+function draw(){
+  ctx.clearRect(0,0,cv.width,cv.height);
+  const lod = currentLod();
+
+  const showMap = cbMap.checked && mapImg && mapImg.complete && mapImg.naturalWidth;
+  if (showMap) drawMap();
+
+  // density (drawn semi-transparent over the map so both read)
+  ctx.globalAlpha = showMap ? (heatOp.value / 100) : 1.0;
+  if (lod){
+    const cs = lod.cell, mx = lod.maxes[metricIdx];
+    for (const [k, cell] of lod.map){
+      const c0 = k.indexOf(','), ix = +k.slice(0, c0), iy = +k.slice(c0+1);
+      const [rx, ry, rw, rh] = cellRect(ix, iy, cs);
+      ctx.fillStyle = colormap(norm(cell[metricIdx], mx));
+      ctx.fillRect(rx, ry, rw + 1, rh + 1);
+    }
+  } else {
+    // fallback: clusters as soft circles (no LOD data)
+    let cmx = 0; for (const cl of DATA.clusters) if (cl.weight > cmx) cmx = cl.weight;
+    for (const cl of DATA.clusters){
+      const [px, py] = V(toScreen(cl.center[0], cl.center[1]));
+      ctx.fillStyle = colormap(norm(cl.weight, cmx));
+      ctx.beginPath(); ctx.arc(px, py, 6, 0, Math.PI*2); ctx.fill();
+    }
+  }
+  ctx.globalAlpha = 1.0;
+
+  // navmesh outlines
+  if (cbNav.checked){
+    ctx.strokeStyle = '#ff5d5d'; ctx.lineWidth = 1.5;
+    for (const v of DATA.navmesh){
+      const [x0,y0] = V(toScreen(v.min[0], v.max[1]));
+      const [x1,y1] = V(toScreen(v.max[0], v.min[1]));
+      ctx.strokeRect(x0, y0, x1-x0, y1-y0);
+    }
+  }
+
+  // scene bounds
+  ctx.strokeStyle = '#3a4049'; ctx.lineWidth = 1;
+  { const [bx,by] = V([MARGIN, MARGIN]); ctx.strokeRect(bx, by, plotW*zoom, plotH*zoom); }
+
+  // selected-cell highlight (resolved at the current LOD)
+  if (selected && lod){
+    const cs = lod.cell;
+    const ix = Math.floor(selected.wx/cs), iy = Math.floor(selected.wy/cs);
+    const [rx, ry, rw, rh] = cellRect(ix, iy, cs);
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 2;
+    ctx.strokeRect(rx, ry, rw, rh);
+  }
+
+  // cameras: white dot + facing line, constant SCREEN size (don't grow with zoom),
+  // drawn over a dark backing so they read on any heat color.
+  if (cbCam.checked){
+    const LEN = 16, R = 4;
+    for (const cam of DATA.cameras){
+      const [px, py] = V(toScreen(cam.location[0], cam.location[1]));
+      const yaw = (cam.rotation[1] || 0) * Math.PI/180;
+      // world dir (cos,sin) -> screen (-cos,-sin) because both X and Y are flipped in toScreen
+      const ex = px - Math.cos(yaw)*LEN, ey = py - Math.sin(yaw)*LEN;
+      ctx.lineCap = 'round';
+      ctx.strokeStyle = '#000'; ctx.lineWidth = 3.5;
+      ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(ex, ey); ctx.stroke();
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(ex, ey); ctx.stroke();
+      ctx.beginPath(); ctx.arc(px, py, R, 0, Math.PI*2);
+      ctx.fillStyle = '#fff'; ctx.fill();
+      ctx.lineWidth = 1; ctx.strokeStyle = '#000'; ctx.stroke();
+      if (cam === selectedCam){  // ring the selected camera
+        ctx.beginPath(); ctx.arc(px, py, R + 4, 0, Math.PI*2);
+        ctx.strokeStyle = '#ffd23f'; ctx.lineWidth = 2; ctx.stroke();
+      }
+    }
+  }
+
+  // side-panel stats that depend on the LOD
+  const mx = lod ? lod.maxes[metricIdx] : 0;
+  document.getElementById('sLod').textContent = lod ? Math.round(lod.cell) : '-';
+  document.getElementById('sBins').textContent = lod ? lod.map.size : (DATA.clusters.length + ' (clusters)');
+  document.getElementById('sMax').textContent = lod ? mx.toLocaleString() : '-';
+  document.getElementById('legMax').textContent = lod ? mx.toLocaleString() : '-';
+  document.getElementById('legTitle').textContent = METRIC_LABELS[metricIdx]
+    + ((metricIdx > 0 && !hasMetrics) ? ' — run "Refresh Heat Map Data"' : '');
+  updateSelected(lod);
+}
+
+function cellAt(lod, ix, iy){ return lod ? (lod.map.get(ix + ',' + iy) || null) : null; }
+
+function updateSelected(lod){
+  const el = (id) => document.getElementById(id);
+  if (!selected || !lod){
+    for (const id of ['selInst','selVerts','selDraws','selRank','selPct','selCenter','selSize']) el(id).textContent = '-';
+    el('selGoto').style.display = 'none';
+    el('selGotoMsg').style.display = 'none';
+    el('selInspect').style.display = 'none';
+    el('selInspectMsg').style.display = 'none';
+    el('selInspectList').innerHTML = '';
+    return;
+  }
+  el('selGoto').style.display = GOTO ? 'inline-block' : 'none';
+  el('selInspect').style.display = GOTO ? 'inline-block' : 'none';
+  const cs = lod.cell;
+  const ix = Math.floor(selected.wx/cs), iy = Math.floor(selected.wy/cs);
+  const cell = cellAt(lod, ix, iy) || [0, 0, 0];
+  el('selInst').textContent = cell[0].toLocaleString();
+  el('selVerts').textContent = cell[1].toLocaleString();
+  el('selDraws').textContent = cell[2].toLocaleString();
+  // rank by the currently selected metric (1 = highest)
+  const val = cell[metricIdx];
+  let higher = 0;
+  const total = lod.map.size;
+  for (const c of lod.map.values()) if (c[metricIdx] > val) higher++;
+  el('selRank').textContent = val > 0 ? `#${higher + 1} of ${total}` : '-';
+  el('selPct').textContent = lod.maxes[metricIdx] > 0 ? (100*val/lod.maxes[metricIdx]).toFixed(1) + '%' : '-';
+  el('selCenter').textContent = `${Math.round((ix+0.5)*cs)}, ${Math.round((iy+0.5)*cs)}`;
+  el('selSize').textContent = Math.round(cs);
+}
+
+// ---- interaction: hover + click-select + zoom (scroll) + pan (drag) + reset (dbl-click) ----
+const readout = document.getElementById('readout');
+
+function viewPx(clientX, clientY){
+  const r = cv.getBoundingClientRect();
+  return [(clientX - r.left) * (cv.width / r.width),
+          (clientY - r.top)  * (cv.height / r.height)];
+}
+function worldAt(clientX, clientY){
+  const [vx, vy] = viewPx(clientX, clientY);
+  const [bx, by] = invV(vx, vy);            // view -> base screen
+  return [maxX - (bx - MARGIN) / sx,        // base screen -> world (X flipped to match toScreen)
+          maxY - (by - MARGIN) / sy];
+}
+
+let dragging = false, moved = false, lastX = 0, lastY = 0;
+cv.style.cursor = 'grab';
+cv.addEventListener('mousedown', (e) => { dragging = true; moved = false; lastX = e.clientX; lastY = e.clientY; cv.style.cursor = 'grabbing'; });
+window.addEventListener('mouseup', () => { dragging = false; cv.style.cursor = 'grab'; });
+
+cv.addEventListener('mousemove', (e) => {
+  if (dragging){
+    const r = cv.getBoundingClientRect();
+    const dx = (e.clientX - lastX) * (cv.width / r.width);
+    const dy = (e.clientY - lastY) * (cv.height / r.height);
+    if (Math.abs(dx) > 1 || Math.abs(dy) > 1) moved = true;
+    panX += dx; panY += dy;
+    lastX = e.clientX; lastY = e.clientY;
+    draw();
+    return;
+  }
+  const [wx, wy] = worldAt(e.clientX, e.clientY);
+  document.getElementById('sX').textContent = Math.round(wx);
+  document.getElementById('sY').textContent = Math.round(wy);
+  let txt = `X ${Math.round(wx)}  Y ${Math.round(wy)}`;
+  const lod = currentLod();
+  if (lod){
+    const ix = Math.floor(wx/lod.cell), iy = Math.floor(wy/lod.cell);
+    const cell = cellAt(lod, ix, iy);
+    txt += `\n${METRIC_LABELS[metricIdx]} ${(cell ? cell[metricIdx] : 0).toLocaleString()}`;
+  }
+  readout.textContent = txt;
+});
+cv.addEventListener('mouseleave', () => { readout.textContent = ''; });
+
+// click selects a camera (if near a dot) else a cell -- but not if it was a drag
+function pickCamera(clientX, clientY){
+  if (!cbCam.checked) return null;
+  const [vx, vy] = viewPx(clientX, clientY);
+  let best = null, bestD = 100;  // within 10px (squared)
+  for (const cam of DATA.cameras){
+    const [px, py] = V(toScreen(cam.location[0], cam.location[1]));
+    const d = (px-vx)*(px-vx) + (py-vy)*(py-vy);
+    if (d < bestD){ bestD = d; best = cam; }
+  }
+  return best;
+}
+function fileUrl(p){ return 'file:///' + String(p).replace(/\\/g,'/'); }
+function fallbackCopy(t){
+  const ta = document.createElement('textarea'); ta.value = t;
+  ta.style.position = 'fixed'; ta.style.opacity = '0'; document.body.appendChild(ta);
+  ta.select(); try { document.execCommand('copy'); } catch(e){} document.body.removeChild(ta);
+}
+function copyText(t){
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(t).catch(() => fallbackCopy(t));
+  else fallbackCopy(t);
+}
+function gotoCamera(cam){
+  const msg = document.getElementById('camGotoMsg');
+  msg.style.display = 'block';
+  if (!GOTO){ msg.textContent = 'No bridge configured.'; return; }
+  msg.textContent = 'Sending...';
+  const L = cam.location, R = cam.rotation || [0,0,0];
+  fetch(`${GOTO}/gotocam?x=${(+L[0]).toFixed(1)}&y=${(+L[1]).toFixed(1)}&z=${(+L[2]).toFixed(1)}`
+        + `&pitch=${+R[0]}&yaw=${+R[1]}&roll=${+R[2]}`)
+    .then(r => { msg.textContent = r.ok ? 'Moved editor to camera.' : ('Error: ' + r.status); })
+    .catch(() => { msg.textContent = 'Editor not reachable (is it open?).'; });
+}
+
+function selectCamera(cam){
+  const el = (id) => document.getElementById(id);
+  el('camIdx').textContent = (cam.index !== undefined ? cam.index : '-');
+  el('camFps').textContent = (cam.fps)
+    ? `${cam.fps.toFixed(1)} fps  (${(cam.ms || 0).toFixed(2)} ms)`
+    : '— (run Profile from Cameras)';
+  el('camLoc').textContent = `${Math.round(cam.location[0])}, ${Math.round(cam.location[1])}, ${Math.round(cam.location[2])}`;
+  const gbtn = el('camGoto'), gmsg = el('camGotoMsg');
+  gmsg.style.display = 'none';
+  if (GOTO){ gbtn.style.display = 'inline-block'; gbtn.onclick = () => gotoCamera(cam); }
+  else gbtn.style.display = 'none';
+  const shot = el('camShot');
+  if (cam.screenshot){ shot.src = fileUrl(cam.screenshot); shot.style.display = 'block'; }
+  else { shot.style.display = 'none'; shot.removeAttribute('src'); }
+  const tr = el('camTrace'), btn = el('camCopy'), hint = el('camHint');
+  if (cam.trace){
+    tr.textContent = cam.trace;
+    btn.style.display = 'inline-block'; hint.style.display = 'block';
+    btn.onclick = () => { copyText(cam.trace); btn.textContent = 'Copied!'; setTimeout(() => btn.textContent = 'Copy trace path', 1200); };
+  } else {
+    tr.textContent = '(no trace yet - run Profile from Cameras)';
+    btn.style.display = 'none'; hint.style.display = 'none';
+  }
+}
+
+cv.addEventListener('click', (e) => {
+  if (moved) return;
+  const cam = pickCamera(e.clientX, e.clientY);
+  if (cam){ selectedCam = cam; selectCamera(cam); draw(); return; }
+  const [wx, wy] = worldAt(e.clientX, e.clientY);
+  selected = { wx, wy };
+  draw();
+  runInspect();   // auto-analyze the clicked cell (select + breakdown in editor)
+});
+
+cv.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  const [vx, vy] = viewPx(e.clientX, e.clientY);   // anchor zoom under the cursor
+  const factor = e.deltaY < 0 ? 1.15 : 1/1.15;
+  panX = vx - (vx - panX) * factor;
+  panY = vy - (vy - panY) * factor;
+  zoom *= factor;
+  draw();
+}, { passive: false });
+
+cv.addEventListener('dblclick', () => { zoom = 1; panX = 0; panY = 0; draw(); });
+
+// "Go to this cell" -> ask the localhost bridge to move the editor viewport to the cell center.
+function gotoEditor(x, y){
+  const msg = document.getElementById('selGotoMsg');
+  msg.style.display = 'block';
+  if (!GOTO){ msg.textContent = 'No bridge configured.'; return; }
+  msg.textContent = 'Sending...';
+  fetch(`${GOTO}/goto?x=${x.toFixed(1)}&y=${y.toFixed(1)}`)
+    .then(r => { msg.textContent = r.ok ? 'Moved editor viewport.' : ('Error: ' + r.status); })
+    .catch(() => { msg.textContent = 'Editor not reachable (is it open?).'; });
+}
+document.getElementById('selGoto').onclick = () => {
+  if (!selected) return;
+  const lod = currentLod();
+  const cs = lod ? lod.cell : (finestCell || 1);
+  const ix = Math.floor(selected.wx/cs), iy = Math.floor(selected.wy/cs);
+  gotoEditor((ix + 0.5) * cs, (iy + 0.5) * cs);  // cell center, current LOD
+};
+
+// Auto-analyze: when a cell is selected, ask the bridge to select the cell's meshes in-editor and
+// return a per-mesh vertex breakdown. Runs on cell click (and the button re-runs it).
+let inspectBusy = false;
+function runInspect(){
+  if (!selected || !GOTO || inspectBusy) return;
+  const msg = document.getElementById('selInspectMsg');
+  const list = document.getElementById('selInspectList');
+  msg.style.display = 'block'; list.innerHTML = ''; msg.textContent = 'Analyzing cell in editor...';
+  const lod = currentLod();
+  const cs = lod ? lod.cell : (finestCell || 1);
+  const ix = Math.floor(selected.wx/cs), iy = Math.floor(selected.wy/cs);
+  inspectBusy = true;
+  fetch(`${GOTO}/inspectcell?x=${(ix*cs).toFixed(1)}&y=${(iy*cs).toFixed(1)}&size=${cs.toFixed(1)}`)
+    .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+    .then(rows => {
+      if (!rows || !rows.length){ msg.textContent = 'No meshes found in this cell.'; return; }
+      msg.textContent = 'In this cell — heaviest meshes (by vertices):';
+      list.innerHTML = rows.map(r =>
+        `<div class="stat" style="color:#d6d9dd">${r.mesh}: <b>${r.vertices.toLocaleString()}</b> v`
+        + ` <span style="color:#9aa0a8">(${r.count.toLocaleString()}×)</span></div>`).join('');
+    })
+    .catch(err => {
+      const m = String((err && err.message) || err);
+      msg.textContent = m.indexOf('HTTP') === 0
+        ? `Bridge is up but returned ${m} — restart the editor so it reloads the /inspectcell endpoint.`
+        : 'Bridge not reachable — is the editor open? Check the Output Log for "[goto] bridge listening".';
+    })
+    .finally(() => { inspectBusy = false; });
+}
+document.getElementById('selInspect').onclick = runInspect;  // manual re-run / re-select
+
+[cbLog, cbCam, cbNav, cbMap, cbFlipH, cbFlipV].forEach(cb => cb.addEventListener('change', draw));
+metricSel.addEventListener('change', () => { metricIdx = +metricSel.value; draw(); });
+heatOp.addEventListener('input', draw);
+btnRot.addEventListener('click', () => { mapRot = (mapRot + 90) % 360; btnRot.textContent = 'Rot ' + mapRot + '°'; draw(); });
+draw();
+</script>
+</body>
+</html>
+"""
+
+
+if __name__ == "__main__":
+    generate(CONFIG)
