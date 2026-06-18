@@ -155,19 +155,17 @@ memreport at the end).
 - **FlipH / FlipV / Rot** — align the top-down image to the grid if it's mirrored/rotated.
 - **scroll** = zoom · **drag** = pan · **double-click** = reset. Zooming subdivides the grid (LODs).
 
-**Click a cell** → instances / triangles / draw calls, rank, and the heaviest meshes in that cell. Two
-buttons (powered by a localhost bridge to the editor):
-
-- **Go to this cell in editor** — moves the level viewport to look at the cell.
-- **Select + analyze cell in editor** — selects **only the meshes/instances inside that cell** in the
-  editor (individual foliage instances included — it does **not** select the whole foliage actor).
+**Click a cell** → its instances / triangles / draw calls, rank, and the heaviest meshes in that cell.
+If the editor is open, clicking a cell also **automatically selects — in the editor — only the
+meshes/instances inside that cell** (individual foliage instances included; it does **not** select the
+whole foliage actor), so they're already highlighted when you switch back to Unreal.
 
 **Click a camera dot** → its frame rate (after profiling), screenshot, and `.utrace` path to copy into
-Unreal Insights.
+Unreal Insights, plus a **Go to this camera in editor** button.
 
-> The cell buttons require the editor to be open (the bridge listens on `127.0.0.1:<GotoPort>`, default
-> `30080`). If you only double-clicked the HTML with the editor closed, the map still works — only the
-> "go to / analyze" buttons are inert.
+> The in-editor selection and the camera "Go to" button use a localhost bridge (the editor listens on
+> `127.0.0.1:<GotoPort>`, default `30080`). With the editor closed the heat map still works fully — only
+> those editor-driving actions are inert.
 
 ---
 

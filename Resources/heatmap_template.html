@@ -71,9 +71,6 @@
     <div class="stat">% of densest: <b id="selPct">-</b></div>
     <div class="stat">Center (X, Y): <b id="selCenter">-</b></div>
     <div class="stat">Cell size: <b id="selSize">-</b> uu</div>
-    <button id="selGoto" style="display:none;margin-top:6px;cursor:pointer">Go to this cell in editor</button>
-    <div class="stat" id="selGotoMsg" style="color:#9aa0a8;margin-top:4px;display:none"></div>
-    <button id="selInspect" style="display:none;margin-top:4px;cursor:pointer">Select + analyze cell in editor</button>
     <div class="stat" id="selInspectMsg" style="color:#9aa0a8;margin-top:4px;display:none"></div>
     <div id="selInspectList"></div>
     <div style="height:14px"></div>
@@ -335,15 +332,10 @@ function updateSelected(lod){
   const el = (id) => document.getElementById(id);
   if (!selected || !lod){
     for (const id of ['selInst','selVerts','selDraws','selRank','selPct','selCenter','selSize']) el(id).textContent = '-';
-    el('selGoto').style.display = 'none';
-    el('selGotoMsg').style.display = 'none';
-    el('selInspect').style.display = 'none';
     el('selInspectMsg').style.display = 'none';
     el('selInspectList').innerHTML = '';
     return;
   }
-  el('selGoto').style.display = GOTO ? 'inline-block' : 'none';
-  el('selInspect').style.display = GOTO ? 'inline-block' : 'none';
   const cs = lod.cell;
   const ix = Math.floor(selected.wx/cs), iy = Math.floor(selected.wy/cs);
   const cell = cellAt(lod, ix, iy) || [0, 0, 0];
@@ -487,26 +479,8 @@ cv.addEventListener('wheel', (e) => {
 
 cv.addEventListener('dblclick', () => { zoom = 1; panX = 0; panY = 0; draw(); });
 
-// "Go to this cell" -> ask the localhost bridge to move the editor viewport to the cell center.
-function gotoEditor(x, y){
-  const msg = document.getElementById('selGotoMsg');
-  msg.style.display = 'block';
-  if (!GOTO){ msg.textContent = 'No bridge configured.'; return; }
-  msg.textContent = 'Sending...';
-  fetch(`${GOTO}/goto?x=${x.toFixed(1)}&y=${y.toFixed(1)}`)
-    .then(r => { msg.textContent = r.ok ? 'Moved editor viewport.' : ('Error: ' + r.status); })
-    .catch(() => { msg.textContent = 'Editor not reachable (is it open?).'; });
-}
-document.getElementById('selGoto').onclick = () => {
-  if (!selected) return;
-  const lod = currentLod();
-  const cs = lod ? lod.cell : (finestCell || 1);
-  const ix = Math.floor(selected.wx/cs), iy = Math.floor(selected.wy/cs);
-  gotoEditor((ix + 0.5) * cs, (iy + 0.5) * cs);  // cell center, current LOD
-};
-
-// Auto-analyze: when a cell is selected, ask the bridge to select the cell's meshes in-editor and
-// return a per-mesh vertex breakdown. Runs on cell click (and the button re-runs it).
+// Auto-analyze: when a cell is clicked, ask the bridge to select the cell's meshes in-editor (so they
+// show selected when you switch back to Unreal) and return a per-mesh triangle breakdown.
 let inspectBusy = false;
 function runInspect(){
   if (!selected || !GOTO || inspectBusy) return;
@@ -534,7 +508,6 @@ function runInspect(){
     })
     .finally(() => { inspectBusy = false; });
 }
-document.getElementById('selInspect').onclick = runInspect;  // manual re-run / re-select
 
 [cbLog, cbCam, cbNav, cbMap, cbFlipH, cbFlipV].forEach(cb => cb.addEventListener('change', draw));
 metricSel.addEventListener('change', () => { metricIdx = +metricSel.value; draw(); });
