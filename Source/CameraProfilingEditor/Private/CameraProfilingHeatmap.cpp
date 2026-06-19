@@ -38,6 +38,13 @@ namespace
 		return 0;
 	}
 
+	/** Number of discrete LODs authored on the mesh (Nanite meshes usually report just the fallback). */
+	int32 MeshLODCount(const UStaticMesh* Mesh)
+	{
+		const FStaticMeshRenderData* RD = Mesh ? Mesh->GetRenderData() : nullptr;
+		return RD ? RD->LODResources.Num() : 0;
+	}
+
 	TSharedPtr<FJsonObject> LoadJsonObject(const FString& Path)
 	{
 		FString Str;
@@ -178,7 +185,7 @@ FString FCameraProfilingTools::InspectCell(double MinX, double MinY, double Size
 	UWorld* World = EditorWorld();
 	const double MaxX = MinX + Size, MaxY = MinY + Size;
 
-	struct FAgg { int32 Count = 0; double Triangles = 0.0; };
+	struct FAgg { int32 Count = 0; double Triangles = 0.0; int32 Lods = 0; bool bNanite = false; };
 	TMap<FString, FAgg> PerMesh;
 
 	if (GEditor)
@@ -207,6 +214,8 @@ FString FCameraProfilingTools::InspectCell(double MinX, double MinY, double Size
 					continue;
 				}
 				const int32 Tris = MeshTris(Mesh);
+				const int32 Lods = MeshLODCount(Mesh);
+				const bool bNanite = Mesh->IsNaniteEnabled();
 				const FString Name = Mesh->GetName();
 
 				if (UInstancedStaticMeshComponent* ISM = Cast<UInstancedStaticMeshComponent>(Comp))
@@ -233,6 +242,8 @@ FString FCameraProfilingTools::InspectCell(double MinX, double MinY, double Size
 						FAgg& A = PerMesh.FindOrAdd(Name);
 						A.Count += Hits;
 						A.Triangles += static_cast<double>(Hits) * Tris;
+						A.Lods = Lods;
+						A.bNanite = bNanite;
 					}
 					ISM->MarkRenderStateDirty();
 				}
@@ -244,6 +255,8 @@ FString FCameraProfilingTools::InspectCell(double MinX, double MinY, double Size
 						FAgg& A = PerMesh.FindOrAdd(Name);
 						A.Count += 1;
 						A.Triangles += Tris;
+						A.Lods = Lods;
+						A.bNanite = bNanite;
 						bHitDiscrete = true;
 					}
 				}
@@ -281,6 +294,8 @@ FString FCameraProfilingTools::InspectCell(double MinX, double MinY, double Size
 		W->WriteValue(TEXT("mesh"), Items[i].Key);
 		W->WriteValue(TEXT("count"), Items[i].Value.Count);
 		W->WriteValue(TEXT("triangles"), Items[i].Value.Triangles);
+		W->WriteValue(TEXT("lods"), Items[i].Value.Lods);
+		W->WriteValue(TEXT("nanite"), Items[i].Value.bNanite);
 		W->WriteObjectEnd();
 	}
 	W->WriteArrayEnd();

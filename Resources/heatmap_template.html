@@ -535,9 +535,13 @@ function runInspect(){
     .then(rows => {
       if (!rows || !rows.length){ msg.textContent = 'No meshes found in this cell.'; return; }
       msg.textContent = 'In this cell — heaviest meshes (by triangles):';
-      list.innerHTML = rows.map(r =>
-        `<div class="stat" style="color:#d6d9dd">${r.mesh}: <b>${r.triangles.toLocaleString()}</b> tris`
-        + ` <span style="color:#9aa0a8">(${r.count.toLocaleString()}×)</span></div>`).join('');
+      list.innerHTML = rows.map(r => {
+        // LOD count hints how much that triangle load drops at distance; Nanite does continuous LOD
+        // at runtime (and usually reports few discrete LODs), so flag it instead of a LOD number.
+        const detail = r.nanite ? 'Nanite' : `${r.lods || 0} LOD${r.lods === 1 ? '' : 's'}`;
+        return `<div class="stat" style="color:#d6d9dd">${r.mesh}: <b>${r.triangles.toLocaleString()}</b> tris`
+          + ` <span style="color:#9aa0a8">(${r.count.toLocaleString()}×) · ${detail}</span></div>`;
+      }).join('');
     })
     .catch(err => {
       const m = String((err && err.message) || err);
