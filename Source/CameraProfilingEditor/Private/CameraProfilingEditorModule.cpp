@@ -20,7 +20,7 @@ void FCameraProfilingEditorModule::StartupModule()
 
 	if (UToolMenus::IsToolMenuUIEnabled())
 	{
-		MenuStartupHandle = UToolMenus::RegisterStartupCallback(
+		UToolMenus::RegisterStartupCallback(
 			FSimpleMulticastDelegate::FDelegate::CreateRaw(this, &FCameraProfilingEditorModule::RegisterMenus));
 	}
 

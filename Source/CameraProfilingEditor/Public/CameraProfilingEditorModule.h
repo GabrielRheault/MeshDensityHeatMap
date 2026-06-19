@@ -12,7 +12,4 @@ public:
 
 private:
 	void RegisterMenus();
-
-	/** Registered with UToolMenus::RegisterStartupCallback; builds the Tools -> Yes Chef menu. */
-	FDelegateHandle MenuStartupHandle;
 };

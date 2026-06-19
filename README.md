@@ -186,8 +186,8 @@ Unreal Insights, plus a **Go to this camera in editor** button.
 | Height Above Ground | `250` uu | Camera height over the ground hit. |
 | Cluster Cell Size | `2000` uu | Coarsest heat-map LOD / clustering bin. |
 | Heatmap Subdiv | `8` | Finest LOD = `ClusterCellSize / Subdiv` (power of 2). |
-| Topdown Px | `4096` | Resolution of the square top-down render. |
-| Topdown Exposure Bias | `2.0` EV | Brighten dark/night scenes for the overlay. |
+| Topdown Px | `2048` | Resolution of the square top-down render. |
+| Topdown Margin | `1.3` | Extent multiplier for the top-down render (1.0 = exactly the content box). |
 | Goto Port | `30080` | Localhost port for the heat-map bridge. |
 | Profile Mode | `PIE` | `PIE` (game render path) or `Editor` (viewport). |
 | Warmup / Settle Ticks | `30` / `24` | Frames to let streaming/Lumen/TSR converge. |

@@ -524,7 +524,8 @@ bool FCameraProfilingTools::CaptureTopdown()
 	const double MaxX = Extent.Max.X, MaxY = Extent.Max.Y, MaxZ = Extent.Max.Z;
 
 	const double CX = (MinX + MaxX) * 0.5, CY = (MinY + MaxY) * 0.5;
-	const double Span = FMath::Max3(1.0, MaxX - MinX, MaxY - MinY);
+	// Margin > 1 zooms the capture out so it covers a bit beyond the (percentile-trimmed) content box.
+	const double Span = FMath::Max3(1.0, MaxX - MinX, MaxY - MinY) * FMath::Max(1.0f, S->TopdownMargin);
 	const double Half = Span * 0.5;
 	const int32 Px = FMath::Max(256, S->TopdownPx);
 

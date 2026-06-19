@@ -36,11 +36,6 @@
   <label><input type="checkbox" id="cbNav"> NavMesh</label>
   <label><input type="checkbox" id="cbMap"> Map</label>
   <label title="Heat opacity over the map">Heat <input type="range" id="heatOp" min="0" max="100" value="65" style="width:70px;vertical-align:middle"></label>
-  <span id="mapAlign" title="Align the map image to the grid if it's mirrored/rotated">
-    <label><input type="checkbox" id="cbFlipH"> FlipH</label>
-    <label><input type="checkbox" id="cbFlipV"> FlipV</label>
-    <button id="btnRot">Rot 0&deg;</button>
-  </span>
   <span style="margin-left:auto;color:#9aa0a8">scroll = zoom &nbsp;&middot;&nbsp; drag = pan &nbsp;&middot;&nbsp; double-click = reset</span>
 </header>
 <div id="wrap">
@@ -117,13 +112,7 @@ const hasMetrics = !!(DATA.density && DATA.density.metrics);
 // --- top-down map overlay ---
 const cbMap = document.getElementById('cbMap');
 const heatOp = document.getElementById('heatOp');
-const cbFlipH = document.getElementById('cbFlipH');
-const cbFlipV = document.getElementById('cbFlipV');
-const btnRot = document.getElementById('btnRot');
-let mapRot = 0;
 let mapImg = null;
-// Lazy-load the top-down image only when the Map box is ticked, so a large PNG can't block the heat
-// from drawing on open. Toggle Map on to load + show it.
 const mapSrc = (DATA.map && DATA.map.image) ? DATA.map.image : null;
 function ensureMapLoaded(){
   if (mapSrc && !mapImg){
@@ -133,10 +122,10 @@ function ensureMapLoaded(){
   }
 }
 if (mapSrc){
-  cbMap.checked = false;   // off by default; tick it to load the background
+  cbMap.checked = true;   // on by default: load + show the top-down background
+  ensureMapLoaded();
 } else {
   cbMap.checked = false;
-  document.getElementById('mapAlign').style.display = 'none';
   heatOp.parentElement.style.display = 'none';
 }
 
@@ -220,8 +209,27 @@ function cellRect(ix, iy, cs){
   return [Math.min(ax,bx), Math.min(ay,by), Math.abs(bx-ax), Math.abs(by-ay)];
 }
 
+// Range of cell indices (ix,iy) at cell size cs that can touch the visible canvas, +1 cell of pad.
+// Lets draw() walk only on-screen cells when zoomed in, so frame cost is bounded by the viewport
+// (not the map size) -- the cure for "zoom in = lag" on big maps.
+function visibleCellRange(cs){
+  const worldAtBase = (vx, vy) => {
+    const bx = (vx - panX)/zoom, by = (vy - panY)/zoom;   // view px -> base screen
+    return [maxX - (bx - MARGIN)/sx, maxY - (by - MARGIN)/sy];  // base screen -> world (axes flipped)
+  };
+  const [wx0, wy0] = worldAtBase(0, 0);
+  const [wx1, wy1] = worldAtBase(cv.width, cv.height);
+  const wxLo = Math.min(wx0, wx1), wxHi = Math.max(wx0, wx1);
+  const wyLo = Math.min(wy0, wy1), wyHi = Math.max(wy0, wy1);
+  return {
+    ix0: Math.floor(wxLo/cs) - 1, ix1: Math.floor(wxHi/cs) + 1,
+    iy0: Math.floor(wyLo/cs) - 1, iy1: Math.floor(wyHi/cs) + 1,
+  };
+}
+
 let selected = null;     // {wx, wy} world point of the last cell click (resolved at current LOD)
 let selectedCam = null;  // the clicked camera object (from DATA.cameras)
+let rankCache = { sig: null, higher: 0 };  // memoized selected-cell rank (see updateSelected)
 
 // legend gradient (static)
 (function(){
@@ -237,14 +245,7 @@ function drawMap(){
   const [ax, ay] = V(toScreen(m.min[0], m.min[1]));
   const [bx, by] = V(toScreen(m.max[0], m.max[1]));   // map covers this world AABB
   const rx = Math.min(ax,bx), ry = Math.min(ay,by), rw = Math.abs(bx-ax), rh = Math.abs(by-ay);
-  ctx.save();
-  ctx.translate(rx + rw/2, ry + rh/2);                 // align/flip the image to the grid
-  ctx.rotate(mapRot * Math.PI / 180);
-  ctx.scale(cbFlipH.checked ? -1 : 1, cbFlipV.checked ? -1 : 1);
-  const swap = (mapRot === 90 || mapRot === 270);
-  const dw = swap ? rh : rw, dh = swap ? rw : rh;
-  ctx.drawImage(mapImg, -dw/2, -dh/2, dw, dh);
-  ctx.restore();
+  ctx.drawImage(mapImg, rx, ry, rw, rh);
 }
 
 function draw(){
@@ -258,11 +259,30 @@ function draw(){
   ctx.globalAlpha = showMap ? (heatOp.value / 100) : 1.0;
   if (lod){
     const cs = lod.cell, mx = lod.maxes[metricIdx];
-    for (const [k, cell] of lod.map){
-      const c0 = k.indexOf(','), ix = +k.slice(0, c0), iy = +k.slice(c0+1);
-      const [rx, ry, rw, rh] = cellRect(ix, iy, cs);
-      ctx.fillStyle = colormap(norm(cell[metricIdx], mx));
-      ctx.fillRect(rx, ry, rw + 1, rh + 1);
+    const W = cv.width, H = cv.height;
+    const rng = visibleCellRange(cs);
+    const rangeArea = (rng.ix1 - rng.ix0 + 1) * (rng.iy1 - rng.iy0 + 1);
+    if (rangeArea <= lod.map.size){
+      // Zoomed in: few cells on screen -> walk the visible index range, look up each (work capped
+      // at the viewport, independent of total map size).
+      for (let ix = rng.ix0; ix <= rng.ix1; ix++){
+        for (let iy = rng.iy0; iy <= rng.iy1; iy++){
+          const cell = lod.map.get(ix + ',' + iy);
+          if (!cell) continue;
+          const [rx, ry, rw, rh] = cellRect(ix, iy, cs);
+          ctx.fillStyle = colormap(norm(cell[metricIdx], mx));
+          ctx.fillRect(rx, ry, rw + 1, rh + 1);
+        }
+      }
+    } else {
+      // Zoomed out: the visible range spans the whole map -> walk the populated cells, cull off-screen.
+      for (const [k, cell] of lod.map){
+        const c0 = k.indexOf(','), ix = +k.slice(0, c0), iy = +k.slice(c0+1);
+        const [rx, ry, rw, rh] = cellRect(ix, iy, cs);
+        if (rx + rw < 0 || ry + rh < 0 || rx > W || ry > H) continue;
+        ctx.fillStyle = colormap(norm(cell[metricIdx], mx));
+        ctx.fillRect(rx, ry, rw + 1, rh + 1);
+      }
     }
   } else {
     // fallback: clusters as soft circles (no LOD data)
@@ -304,6 +324,7 @@ function draw(){
     const LEN = 16, R = 4;
     for (const cam of DATA.cameras){
       const [px, py] = V(toScreen(cam.location[0], cam.location[1]));
+      if (px < -LEN || py < -LEN || px > cv.width + LEN || py > cv.height + LEN) continue;  // off-screen
       const yaw = (cam.rotation[1] || 0) * Math.PI/180;
       // world dir (cos,sin) -> screen (-cos,-sin) because both X and Y are flipped in toScreen
       const ex = px - Math.cos(yaw)*LEN, ey = py - Math.sin(yaw)*LEN;
@@ -349,12 +370,17 @@ function updateSelected(lod){
   el('selInst').textContent = cell[0].toLocaleString();
   el('selVerts').textContent = cell[1].toLocaleString();
   el('selDraws').textContent = cell[2].toLocaleString();
-  // rank by the currently selected metric (1 = highest)
+  // rank by the currently selected metric (1 = highest). This is an O(cells) scan, so memoize it:
+  // pan/zoom redraws every frame but the rank only changes when the cell, metric, or LOD changes.
   const val = cell[metricIdx];
-  let higher = 0;
   const total = lod.map.size;
-  for (const c of lod.map.values()) if (c[metricIdx] > val) higher++;
-  el('selRank').textContent = val > 0 ? `#${higher + 1} of ${total}` : '-';
+  const sig = ix + ',' + iy + ',' + metricIdx + ',' + cs;
+  if (rankCache.sig !== sig){
+    let higher = 0;
+    for (const c of lod.map.values()) if (c[metricIdx] > val) higher++;
+    rankCache = { sig, higher };
+  }
+  el('selRank').textContent = val > 0 ? `#${rankCache.higher + 1} of ${total}` : '-';
   el('selPct').textContent = lod.maxes[metricIdx] > 0 ? (100*val/lod.maxes[metricIdx]).toFixed(1) + '%' : '-';
   el('selCenter').textContent = `${Math.round((ix+0.5)*cs)}, ${Math.round((iy+0.5)*cs)}`;
   el('selSize').textContent = Math.round(cs);
@@ -516,11 +542,10 @@ function runInspect(){
     .finally(() => { inspectBusy = false; });
 }
 
-[cbLog, cbCam, cbNav, cbMap, cbFlipH, cbFlipV].forEach(cb => cb.addEventListener('change', draw));
-cbMap.addEventListener('change', ensureMapLoaded);  // load the background image only on first toggle
+[cbLog, cbCam, cbNav, cbMap].forEach(cb => cb.addEventListener('change', draw));
+cbMap.addEventListener('change', ensureMapLoaded);  // load the background image on first toggle
 metricSel.addEventListener('change', () => { metricIdx = +metricSel.value; draw(); });
 heatOp.addEventListener('input', draw);
-btnRot.addEventListener('click', () => { mapRot = (mapRot + 90) % 360; btnRot.textContent = 'Rot ' + mapRot + '°'; draw(); });
 draw();
 </script>
 </body>

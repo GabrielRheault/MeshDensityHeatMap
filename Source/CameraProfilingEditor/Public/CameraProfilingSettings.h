@@ -136,10 +136,10 @@ public:
 	UPROPERTY(EditAnywhere, config, Category = "Heat Map", meta = (ClampMin = "256", ClampMax = "8192"))
 	int32 TopdownPx = 2048;
 
-	/** Exposure compensation (EV stops) for the top-down map; 0 = scene-metered, +1 doubles brightness,
-	 *  -1 halves. Tune this in the panel + Refresh if the map is too bright/dark (no rebuild needed). */
-	UPROPERTY(EditAnywhere, config, Category = "Heat Map")
-	float TopdownExposureBias = 0.0f;
+	/** Extent multiplier for the top-down render: 1.0 = exactly the content box, 1.3 = 30% wider.
+	 *  Higher zooms the map out so it covers more of the surrounding heat. Tunable in the panel. */
+	UPROPERTY(EditAnywhere, config, Category = "Heat Map", meta = (ClampMin = "1.0", ClampMax = "3.0"))
+	float TopdownMargin = 1.3f;
 
 	/** Localhost port for the heat map's "Go to / inspect cell" bridge. */
 	UPROPERTY(EditAnywhere, config, Category = "Heat Map", meta = (ClampMin = "1024", ClampMax = "65535"))
