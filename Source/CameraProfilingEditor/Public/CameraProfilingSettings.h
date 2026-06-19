@@ -4,23 +4,15 @@
 #include "Engine/DeveloperSettings.h"
 #include "CameraProfilingSettings.generated.h"
 
-/** How a spawned camera's ground Z is resolved. */
-UENUM()
-enum class ECameraPlacementMethod : uint8
-{
-	/** Down line-trace (Visibility, then WorldStatic/WorldDynamic object trace). */
-	Raycast,
-	/** Project the point onto the NavMesh (falls back to Raycast if projection fails). */
-	NavMesh,
-};
-
-/** Which extent the camera grid is laid over. */
+/** Which extent the camera grid is laid over -- and whether navmesh is used at all. */
 UENUM()
 enum class ECameraBoundsSource : uint8
 {
-	/** Overall actor/instance bounds of the loaded level geometry (tight; good default). */
+	/** Overall actor/instance bounds of the loaded level geometry (tight; good default). Pure raycast
+	 *  placement -- navmesh is never consulted. */
 	Scene,
-	/** Union of the level's NavMeshBoundsVolume AABBs (falls back to Scene if none). */
+	/** Union of the level's NavMeshBoundsVolume AABBs (falls back to Scene if none). In this mode camera
+	 *  ground Z is projected onto the navmesh and points that aren't on the navmesh are rejected. */
 	NavMesh,
 	/** Full authored World Partition extent (UWorldPartition::GetEditorWorldBounds; covers all cells
 	 *  even when unloaded). Falls back to Scene on non-WP maps. Can be large/sparse. */
@@ -83,9 +75,6 @@ public:
 	FRotator BaseRotation = FRotator::ZeroRotator;
 
 	// --- Placement ---
-	UPROPERTY(EditAnywhere, config, Category = "Placement")
-	ECameraPlacementMethod PlacementMethod = ECameraPlacementMethod::Raycast;
-
 	/** Start the down-trace this far above the nominal Z. */
 	UPROPERTY(EditAnywhere, config, Category = "Placement")
 	float TraceExtraHeight = 100000.0f;
@@ -97,14 +86,6 @@ public:
 	/** Place the camera this far above the ground hit. */
 	UPROPERTY(EditAnywhere, config, Category = "Placement")
 	float HeightAboveGround = 250.0f;
-
-	/** Only spawn where the hit is actually ON the NavMesh (rejects roofs inside the volume box). */
-	UPROPERTY(EditAnywhere, config, Category = "Placement")
-	bool bRequireNavmesh = true;
-
-	/** Max vertical gap (UU) allowed between the ground hit and the NavMesh below it. */
-	UPROPERTY(EditAnywhere, config, Category = "Placement")
-	float NavmeshToleranceZ = 300.0f;
 
 	/** Ring offsets tried within a cell before snapping to the nearest navmesh point. */
 	UPROPERTY(EditAnywhere, config, Category = "Placement")

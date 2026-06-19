@@ -66,6 +66,7 @@
     <div class="stat">% of densest: <b id="selPct">-</b></div>
     <div class="stat">Center (X, Y): <b id="selCenter">-</b></div>
     <div class="stat">Cell size: <b id="selSize">-</b> uu</div>
+    <button id="selInUnreal" style="display:none;margin:6px 0;cursor:pointer">See in Unreal (select cell meshes)</button>
     <div class="stat" id="selInspectMsg" style="color:#9aa0a8;margin-top:4px;display:none"></div>
     <div id="selInspectList"></div>
     <div style="height:14px"></div>
@@ -362,8 +363,11 @@ function updateSelected(lod){
     for (const id of ['selInst','selVerts','selDraws','selRank','selPct','selCenter','selSize']) el(id).textContent = '-';
     el('selInspectMsg').style.display = 'none';
     el('selInspectList').innerHTML = '';
+    el('selInUnreal').style.display = 'none';
     return;
   }
+  // Offer the editor-selection button once a cell is picked (only if the bridge is configured).
+  el('selInUnreal').style.display = GOTO ? 'inline-block' : 'none';
   const cs = lod.cell;
   const ix = Math.floor(selected.wx/cs), iy = Math.floor(selected.wy/cs);
   const cell = cellAt(lod, ix, iy) || [0, 0, 0];
@@ -496,8 +500,10 @@ cv.addEventListener('click', (e) => {
   if (cam){ selectedCam = cam; selectCamera(cam); draw(); return; }
   const [wx, wy] = worldAt(e.clientX, e.clientY);
   selected = { wx, wy };
+  // Clear any breakdown from the previously inspected cell; editor selection waits for the button.
+  document.getElementById('selInspectMsg').style.display = 'none';
+  document.getElementById('selInspectList').innerHTML = '';
   draw();
-  runInspect();   // auto-analyze the clicked cell (select + breakdown in editor)
 });
 
 cv.addEventListener('wheel', (e) => {
@@ -512,8 +518,8 @@ cv.addEventListener('wheel', (e) => {
 
 cv.addEventListener('dblclick', () => { zoom = 1; panX = 0; panY = 0; draw(); });
 
-// Auto-analyze: when a cell is clicked, ask the bridge to select the cell's meshes in-editor (so they
-// show selected when you switch back to Unreal) and return a per-mesh triangle breakdown.
+// "See in Unreal": ask the bridge to select the selected cell's meshes in-editor (so they show
+// selected when you switch back to Unreal) and return a per-mesh triangle breakdown.
 let inspectBusy = false;
 function runInspect(){
   if (!selected || !GOTO || inspectBusy) return;
@@ -546,6 +552,7 @@ function runInspect(){
 cbMap.addEventListener('change', ensureMapLoaded);  // load the background image on first toggle
 metricSel.addEventListener('change', () => { metricIdx = +metricSel.value; draw(); });
 heatOp.addEventListener('input', draw);
+document.getElementById('selInUnreal').addEventListener('click', runInspect);
 draw();
 </script>
 </body>

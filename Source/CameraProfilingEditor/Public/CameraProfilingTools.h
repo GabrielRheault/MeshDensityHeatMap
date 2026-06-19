@@ -51,8 +51,9 @@ public:
 	 *  instances) and return a JSON per-mesh breakdown (heaviest by triangles first). */
 	static FString InspectCell(double MinX, double MinY, double Size);
 
-	/** Move the active level-editor viewport to look at the cell center (ground-framed). */
-	static void GotoCell(double X, double Y);
+	/** Move the active level-editor viewport to a profiled camera's exact transform (so you see what
+	 *  it saw). Called by the heat map's "Go to this camera in editor" button. */
+	static void GotoCamera(double X, double Y, double Z, double Pitch, double Yaw, double Roll);
 
 	// --- Phase 3: profiling ---
 	/** Write camera_grid.json from the current cameras, arm the runtime subsystem, and start PIE

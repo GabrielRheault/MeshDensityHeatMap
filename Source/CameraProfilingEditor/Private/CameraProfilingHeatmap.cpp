@@ -291,29 +291,13 @@ FString FCameraProfilingTools::InspectCell(double MinX, double MinY, double Size
 	return Json;
 }
 
-void FCameraProfilingTools::GotoCell(double X, double Y)
+void FCameraProfilingTools::GotoCamera(double X, double Y, double Z, double Pitch, double Yaw, double Roll)
 {
-	UWorld* World = EditorWorld();
-	if (!World)
-	{
-		return;
-	}
-	const UCameraProfilingSettings* S = GetDefault<UCameraProfilingSettings>();
-	double GroundZ = 0.0;
-	const TOptional<double> G = ResolveGroundZ(World, X, Y, S->TraceExtraHeight);
-	if (G.IsSet())
-	{
-		GroundZ = G.GetValue();
-	}
-
-	const FVector Target(X, Y, GroundZ);
-	const double Dist = 1500.0;
-	const FVector CamPos = Target + FVector(-Dist * 0.7, 0.0, Dist * 0.7); // oblique 3/4 framing
-
+	// Put the level-editor viewport at the profiled camera's exact transform so you see what it saw.
 	if (FLevelEditorViewportClient* VC = GCurrentLevelEditingViewportClient)
 	{
-		VC->SetViewLocation(CamPos);
-		VC->SetViewRotation((Target - CamPos).Rotation());
+		VC->SetViewLocation(FVector(X, Y, Z));
+		VC->SetViewRotation(FRotator(Pitch, Yaw, Roll));
 		VC->Invalidate();
 	}
 }

@@ -137,8 +137,9 @@ TOptional<double> FCameraProfilingTools::ResolveGroundZ(UWorld* World, double X,
 		return TOptional<double>();
 	}
 
-	// NavMesh method: project first, fall back to raycast.
-	if (S->PlacementMethod == ECameraPlacementMethod::NavMesh)
+	// NavMesh bounds mode: project onto the navmesh first, fall back to raycast. Other bounds sources
+	// never consult the navmesh.
+	if (S->BoundsSource == ECameraBoundsSource::NavMesh)
 	{
 		double Z;
 		if (ProjectNav(World, FVector(X, Y, NominalZ), FVector(200.0, 200.0, 100000.0), Z))
@@ -812,13 +813,15 @@ int32 FCameraProfilingTools::SpawnCameras()
 		}
 	}
 	const int32 MaxTries = FMath::Min(Offsets.Num(), 1 + FMath::Max(0, S->PlacementRetries));
-	const bool bRequireNav = S->bRequireNavmesh;
+	// Navmesh is only used in NavMesh bounds mode; Scene / World Partition place by raycast alone.
+	const bool bRequireNav = (S->BoundsSource == ECameraBoundsSource::NavMesh);
+	const double NavToleranceZ = 300.0; // max vertical gap allowed between the ground hit and the navmesh
 
 	auto GroundIfValid = [&](double Cx, double Cy, double NominalZ, double& OutG) -> bool
 	{
 		TOptional<double> G = ResolveGroundZ(World, Cx, Cy, NominalZ);
 		if (!G.IsSet()) { return false; }
-		if (bRequireNav && !OnNavmesh(World, Cx, Cy, G.GetValue(), S->NavmeshToleranceZ)) { return false; }
+		if (bRequireNav && !OnNavmesh(World, Cx, Cy, G.GetValue(), NavToleranceZ)) { return false; }
 		OutG = G.GetValue();
 		return true;
 	};

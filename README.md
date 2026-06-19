@@ -179,10 +179,8 @@ Unreal Insights, plus a **Go to this camera in editor** button.
 |---------|---------|-------|
 | Grid Resolution | `10 × 10` | Used by the "From Settings" preset. |
 | Jitter / Padding | `0.5` / `0.05` | Random offset within a cell; inward margin. |
-| Bounds Source | `NavMesh` | `NavMesh` (union of volumes), `Scene` (loaded geometry bounds), or `WorldPartition` (full authored world extent — for WP maps with no NavMeshBoundsVolume). |
+| Bounds Source | `Scene` | `Scene` (loaded geometry bounds), `NavMesh` (union of volumes), or `WorldPartition` (full authored world extent — for WP maps with no NavMeshBoundsVolume). Also decides placement: only `NavMesh` mode projects cameras onto the navmesh and rejects off-navmesh points; `Scene`/`WorldPartition` place by raycast alone. |
 | Aim At Clusters | `true` | Face the densest nearby assets. |
-| Placement Method | `Raycast` | `Raycast` (down-trace) or `NavMesh` (project to navmesh). |
-| Require Navmesh | `true` | Reject cameras that land on roofs/geometry off the NavMesh. |
 | Height Above Ground | `250` uu | Camera height over the ground hit. |
 | Cluster Cell Size | `2000` uu | Coarsest heat-map LOD / clustering bin. |
 | Heatmap Subdiv | `8` | Finest LOD = `ClusterCellSize / Subdiv` (power of 2). |

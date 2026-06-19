@@ -53,7 +53,7 @@ namespace
 	TSharedRef<SDockTab> SpawnPanelTab(const FSpawnTabArgs&)
 	{
 		// Details view bound to the settings CDO -> auto-generates the right widget per property
-		// (grid resolution, the Bounds Source dropdown, Require Navmesh checkbox, etc.).
+		// (grid resolution, the Bounds Source dropdown, height above ground, etc.).
 		FPropertyEditorModule& PropertyEditor = FModuleManager::LoadModuleChecked<FPropertyEditorModule>(TEXT("PropertyEditor"));
 		FDetailsViewArgs Args;
 		Args.bAllowSearch = true;

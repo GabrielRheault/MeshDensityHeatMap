@@ -54,8 +54,8 @@ void FCameraProfilingHttpServer::Start()
 		return;
 	}
 
-	GotoRoute = Router->BindRoute(FHttpPath(TEXT("/goto")), EHttpServerRequestVerbs::VERB_GET,
-		FHttpRequestHandler::CreateRaw(this, &FCameraProfilingHttpServer::HandleGoto));
+	GotoCamRoute = Router->BindRoute(FHttpPath(TEXT("/gotocam")), EHttpServerRequestVerbs::VERB_GET,
+		FHttpRequestHandler::CreateRaw(this, &FCameraProfilingHttpServer::HandleGotoCam));
 	InspectRoute = Router->BindRoute(FHttpPath(TEXT("/inspectcell")), EHttpServerRequestVerbs::VERB_GET,
 		FHttpRequestHandler::CreateRaw(this, &FCameraProfilingHttpServer::HandleInspect));
 
@@ -72,20 +72,24 @@ void FCameraProfilingHttpServer::Stop()
 	}
 	if (Router.IsValid())
 	{
-		if (GotoRoute.IsValid()) { Router->UnbindRoute(GotoRoute); }
+		if (GotoCamRoute.IsValid()) { Router->UnbindRoute(GotoCamRoute); }
 		if (InspectRoute.IsValid()) { Router->UnbindRoute(InspectRoute); }
 	}
-	GotoRoute.Reset();
+	GotoCamRoute.Reset();
 	InspectRoute.Reset();
 	Router.Reset();
 	bStarted = false;
 }
 
-bool FCameraProfilingHttpServer::HandleGoto(const FHttpServerRequest& Request, const FHttpResultCallback& OnComplete)
+bool FCameraProfilingHttpServer::HandleGotoCam(const FHttpServerRequest& Request, const FHttpResultCallback& OnComplete)
 {
 	const double X = QueryNumber(Request, TEXT("x"));
 	const double Y = QueryNumber(Request, TEXT("y"));
-	FCameraProfilingTools::GotoCell(X, Y);
+	const double Z = QueryNumber(Request, TEXT("z"));
+	const double Pitch = QueryNumber(Request, TEXT("pitch"));
+	const double Yaw = QueryNumber(Request, TEXT("yaw"));
+	const double Roll = QueryNumber(Request, TEXT("roll"));
+	FCameraProfilingTools::GotoCamera(X, Y, Z, Pitch, Yaw, Roll);
 	OnComplete(JsonResponse(TEXT("{\"ok\":true}")));
 	return true;
 }
