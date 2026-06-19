@@ -122,11 +122,18 @@ const cbFlipV = document.getElementById('cbFlipV');
 const btnRot = document.getElementById('btnRot');
 let mapRot = 0;
 let mapImg = null;
-if (DATA.map && DATA.map.image){
-  mapImg = new Image();
-  mapImg.onload = () => draw();
-  mapImg.src = DATA.map.image;   // relative to the HTML (same data/ folder)
-  cbMap.checked = true;
+// Lazy-load the top-down image only when the Map box is ticked, so a large PNG can't block the heat
+// from drawing on open. Toggle Map on to load + show it.
+const mapSrc = (DATA.map && DATA.map.image) ? DATA.map.image : null;
+function ensureMapLoaded(){
+  if (mapSrc && !mapImg){
+    mapImg = new Image();
+    mapImg.onload = () => draw();
+    mapImg.src = mapSrc;   // relative to the HTML (same data/ folder)
+  }
+}
+if (mapSrc){
+  cbMap.checked = false;   // off by default; tick it to load the background
 } else {
   cbMap.checked = false;
   document.getElementById('mapAlign').style.display = 'none';
@@ -510,6 +517,7 @@ function runInspect(){
 }
 
 [cbLog, cbCam, cbNav, cbMap, cbFlipH, cbFlipV].forEach(cb => cb.addEventListener('change', draw));
+cbMap.addEventListener('change', ensureMapLoaded);  // load the background image only on first toggle
 metricSel.addEventListener('change', () => { metricIdx = +metricSel.value; draw(); });
 heatOp.addEventListener('input', draw);
 btnRot.addEventListener('click', () => { mapRot = (mapRot + 90) % 360; btnRot.textContent = 'Rot ' + mapRot + '°'; draw(); });

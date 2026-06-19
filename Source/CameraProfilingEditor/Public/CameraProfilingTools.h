@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 
 class UWorld;
+class FJsonObject;
 
 /**
  * Editor-side operations for the Camera Profiling plugin (C++ port of the old Python tooling).
@@ -34,6 +35,10 @@ public:
 
 	/** Resolve the ground Z under (X, Y) using the configured placement method. Unset on miss. */
 	static TOptional<double> ResolveGroundZ(UWorld* World, double X, double Y, double NominalZ);
+
+	/** The world extent the grid, top-down render, and heat map should all share, per the configured
+	 *  Bounds Source (WorldPartition → NavMesh-volume union → Scene content). Reads scene_data.json. */
+	static FBox ResolveExtent(const TSharedPtr<FJsonObject>& Scene);
 
 	// --- Phase 2: heat map ---
 	/** Build density_heatmap.html from scene_data.json (+ overlay) and optionally open it. */

@@ -75,8 +75,10 @@ Tools
 4. **`Refresh Heat Map Data`** → re-scan the level into the heat map **without** regenerating or moving
    cameras. Use it after you've edited the level but want to keep your camera layout.
 
-> Tweak grid density, jitter, placement method, aim, and more in
-> **Project Settings → Yes Chef → Camera Profiling** (see [Settings](#settings)).
+> **Prefer a panel?** *Tools → … → Camera Profiling → Camera Profiling Panel…* opens a dockable tab with
+> all the settings (grid size, **Bounds Source**, placement, navmesh options, …) and the four action
+> buttons in one place — set the grid up there and hit **Generate** without touching the menu presets.
+> The same values also live in **Project Settings → Yes Chef → Camera Profiling** (see [Settings](#settings)).
 
 ---
 
@@ -177,7 +179,7 @@ Unreal Insights, plus a **Go to this camera in editor** button.
 |---------|---------|-------|
 | Grid Resolution | `10 × 10` | Used by the "From Settings" preset. |
 | Jitter / Padding | `0.5` / `0.05` | Random offset within a cell; inward margin. |
-| Bounds Source | `NavMesh` | `NavMesh` (union of volumes) or `Scene` (whole-level bounds). |
+| Bounds Source | `NavMesh` | `NavMesh` (union of volumes), `Scene` (loaded geometry bounds), or `WorldPartition` (full authored world extent — for WP maps with no NavMeshBoundsVolume). |
 | Aim At Clusters | `true` | Face the densest nearby assets. |
 | Placement Method | `Raycast` | `Raycast` (down-trace) or `NavMesh` (project to navmesh). |
 | Require Navmesh | `true` | Reject cameras that land on roofs/geometry off the NavMesh. |
@@ -226,3 +228,20 @@ Editor). Adding it is a **structural change**:
 - The heat map runs in a browser sandbox, so it **can't launch Unreal Insights** — it gives you the
   trace path to paste in instead.
 - NavMesh placement requires a **built** NavMesh; otherwise placement falls back to raycast / scene bounds.
+
+### World Partition
+
+The plugin works on World Partition maps, with a few things to know:
+
+- **The editor tools only see *streamed-in* cells.** Before *Generate Cameras* / *Refresh Heat Map Data*,
+  **Load All** (or load the regions you want) in the World Partition window — otherwise the density,
+  bounds, and inspect only cover loaded cells.
+- **No NavMeshBoundsVolume?** Set **Bounds Source = `WorldPartition`** to lay the grid over the full
+  authored world (`GetEditorWorldBounds()`, which covers all cells even unloaded). Note this can be large
+  and sparse, so the grid may include empty areas — `Scene` (loaded geometry) is tighter if you've loaded
+  just the area you care about.
+- **HLOD proxies are skipped** in export and cell-inspect, so distant cells' simplified meshes don't
+  double-count against the real geometry.
+- **Profiling streams as it flies:** the view camera is registered as a **streaming source**, so cells
+  load around each profiled camera. Streaming + Nanite + Virtual Textures + Lumen take time to converge —
+  raise **Warmup/Settle Ticks** on WP maps so traces/screenshots aren't captured mid-stream-in.

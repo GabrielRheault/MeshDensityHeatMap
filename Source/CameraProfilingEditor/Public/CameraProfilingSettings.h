@@ -18,10 +18,13 @@ enum class ECameraPlacementMethod : uint8
 UENUM()
 enum class ECameraBoundsSource : uint8
 {
+	/** Overall actor/instance bounds of the loaded level geometry (tight; good default). */
+	Scene,
 	/** Union of the level's NavMeshBoundsVolume AABBs (falls back to Scene if none). */
 	NavMesh,
-	/** Overall actor/instance bounds of the level. */
-	Scene,
+	/** Full authored World Partition extent (UWorldPartition::GetEditorWorldBounds; covers all cells
+	 *  even when unloaded). Falls back to Scene on non-WP maps. Can be large/sparse. */
+	WorldPartition,
 };
 
 /** Where per-camera profiling runs. */
@@ -59,9 +62,9 @@ public:
 	UPROPERTY(EditAnywhere, config, Category = "Grid", meta = (ClampMin = "0.0", ClampMax = "0.49"))
 	float Padding = 0.05f;
 
-	/** Lay the grid over NavMesh volumes or the whole-scene bounds. */
+	/** Lay the grid over loaded scene bounds, NavMesh volumes, or the full World Partition extent. */
 	UPROPERTY(EditAnywhere, config, Category = "Grid")
-	ECameraBoundsSource BoundsSource = ECameraBoundsSource::NavMesh;
+	ECameraBoundsSource BoundsSource = ECameraBoundsSource::Scene;
 
 	/** Aim each camera at the nearest dense asset cluster (face density, not empty space). */
 	UPROPERTY(EditAnywhere, config, Category = "Grid")
@@ -128,13 +131,15 @@ public:
 	UPROPERTY(EditAnywhere, config, Category = "Heat Map")
 	bool bExportInstances = true;
 
-	/** Resolution (px) of the square orthographic top-down render used as the heat-map background. */
-	UPROPERTY(EditAnywhere, config, Category = "Heat Map", meta = (ClampMin = "256"))
-	int32 TopdownPx = 4096;
+	/** Resolution (px) of the square orthographic top-down render used as the heat-map background.
+	 *  2048 keeps the PNG a sane size for the browser; bump to 4096 for more detail. */
+	UPROPERTY(EditAnywhere, config, Category = "Heat Map", meta = (ClampMin = "256", ClampMax = "8192"))
+	int32 TopdownPx = 2048;
 
-	/** Exposure compensation (EV stops) for the top-down capture; +1 doubles brightness. */
+	/** Exposure compensation (EV stops) for the top-down map; 0 = scene-metered, +1 doubles brightness,
+	 *  -1 halves. Tune this in the panel + Refresh if the map is too bright/dark (no rebuild needed). */
 	UPROPERTY(EditAnywhere, config, Category = "Heat Map")
-	float TopdownExposureBias = 2.0f;
+	float TopdownExposureBias = 0.0f;
 
 	/** Localhost port for the heat map's "Go to / inspect cell" bridge. */
 	UPROPERTY(EditAnywhere, config, Category = "Heat Map", meta = (ClampMin = "1024", ClampMax = "65535"))

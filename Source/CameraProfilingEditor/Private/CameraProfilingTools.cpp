@@ -2,6 +2,7 @@
 #include "CameraProfilingSettings.h"
 
 #include "Editor.h"
+#include "Engine/Engine.h"
 #include "EngineUtils.h"
 #include "Camera/CameraActor.h"
 #include "Camera/CameraTypes.h"
@@ -14,13 +15,20 @@
 #include "Engine/World.h"
 #include "GameFramework/Actor.h"
 #include "Kismet/KismetRenderingLibrary.h"
+#include "ImageUtils.h"
 #include "StaticMeshResources.h"
+#include "TextureResource.h"
+#include "UnrealClient.h"
 
 #include "NavMesh/NavMeshBoundsVolume.h"
 #include "NavigationSystem.h"
 #include "AI/Navigation/NavigationTypes.h"
 
+#include "WorldPartition/WorldPartition.h"
+#include "WorldPartition/HLOD/HLODActor.h"
+
 #include "HAL/FileManager.h"
+#include "HAL/IConsoleManager.h"
 #include "Math/RandomStream.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
@@ -180,6 +188,7 @@ FString FCameraProfilingTools::ExportSceneData()
 
 	TMap<FIntPoint, FDensityBin> FineBins;
 	TMap<FIntPoint, FClusterBin> CoarseBins;
+	TMap<int32, int64> ZHist;  // Z cell -> placement count, for percentile-trimming the Z extent too
 	double MinB[3] = { TNumericLimits<double>::Max(), TNumericLimits<double>::Max(), TNumericLimits<double>::Max() };
 	double MaxB[3] = { TNumericLimits<double>::Lowest(), TNumericLimits<double>::Lowest(), TNumericLimits<double>::Lowest() };
 	int32 PointCount = 0;
@@ -201,6 +210,8 @@ FString FCameraProfilingTools::ExportSceneData()
 
 		FClusterBin& CB = CoarseBins.FindOrAdd(CellKey(X, Y, CoarseCell));
 		CB.SumX += X; CB.SumY += Y; CB.SumZ += Z; CB.Count += 1;
+
+		ZHist.FindOrAdd(FMath::FloorToInt(Z / FineCell)) += 1;
 	};
 
 	// Add draw-call weight without an instance/triangle (instanced comps batch into ONE section set).
@@ -218,7 +229,10 @@ FString FCameraProfilingTools::ExportSceneData()
 	for (TActorIterator<AActor> It(World); It; ++It)
 	{
 		AActor* Actor = *It;
-		if (!Actor || Actor->IsA<ACameraActor>() || Actor->GetActorLabel().StartsWith(TEXT("GridCam_")))
+		// Skip our cameras and World Partition HLOD proxies (the latter would double-count distant
+		// cells' simplified meshes on top of the real geometry).
+		if (!Actor || Actor->IsA<ACameraActor>() || Actor->IsA<AWorldPartitionHLOD>()
+			|| Actor->GetActorLabel().StartsWith(TEXT("GridCam_")))
 		{
 			continue;
 		}
@@ -293,6 +307,51 @@ FString FCameraProfilingTools::ExportSceneData()
 	}
 	Clusters.Sort([](const FCluster& A, const FCluster& B) { return A.Weight > B.Weight; });
 
+	// World Partition extent (from actor descriptors -> covers ALL cells, even unloaded). Lets the
+	// grid use the full authored world as its extent when there's no NavMeshBoundsVolume.
+	FBox WPBounds(ForceInit);
+	if (UWorldPartition* WP = World->GetWorldPartition())
+	{
+		WPBounds = WP->GetEditorWorldBounds();
+	}
+	// GetEditorWorldBounds can return the uninitialized "infinite" box (±4.4e12) on some maps; reject
+	// anything absurdly large (> ~1000 km) so the WorldPartition source falls back to content bounds.
+	const bool bHasWP = WPBounds.IsValid != 0 && WPBounds.GetSize().GetAbsMax() < 1.0e8;
+
+	// Percentile-trimmed content extent (X/Y): the box holding the bulk (~98%) of the instances, so a
+	// few far-flung outlier placements can't balloon the bounds and leave the map / render mostly empty.
+	double ContentMin[3] = { MinB[0], MinB[1], MinB[2] };
+	double ContentMax[3] = { MaxB[0], MaxB[1], MaxB[2] };
+	if (FineBins.Num() > 0)
+	{
+		TMap<int32, int64> XW, YW;
+		for (const TPair<FIntPoint, FDensityBin>& P : FineBins)
+		{
+			XW.FindOrAdd(P.Key.X) += P.Value.Instances;
+			YW.FindOrAdd(P.Key.Y) += P.Value.Instances;
+		}
+		auto AxisRange = [](TMap<int32, int64>& W, double Cell, double& OutMin, double& OutMax)
+		{
+			TArray<int32> Keys; W.GetKeys(Keys); Keys.Sort();
+			int64 Total = 0; for (int32 K : Keys) { Total += W[K]; }
+			if (Total <= 0) { return; }
+			const int64 LoTarget = static_cast<int64>(Total * 0.01);
+			const int64 HiTarget = static_cast<int64>(Total * 0.99);
+			int64 Cum = 0; int32 LoK = Keys[0], HiK = Keys.Last(); bool bGotLo = false;
+			for (int32 K : Keys)
+			{
+				Cum += W[K];
+				if (!bGotLo && Cum >= LoTarget) { LoK = K; bGotLo = true; }
+				if (Cum >= HiTarget) { HiK = K; break; }
+			}
+			OutMin = LoK * Cell;
+			OutMax = (HiK + 1) * Cell;
+		};
+		AxisRange(XW, FineCell, ContentMin[0], ContentMax[0]);
+		AxisRange(YW, FineCell, ContentMin[1], ContentMax[1]);
+		AxisRange(ZHist, FineCell, ContentMin[2], ContentMax[2]);  // trims high-Z outliers too
+	}
+
 	// --- serialize scene_data.json ---
 	FString Json;
 	TSharedRef<TJsonWriter<>> W = TJsonWriterFactory<>::Create(&Json);
@@ -307,6 +366,24 @@ FString FCameraProfilingTools::ExportSceneData()
 	W->WriteArrayStart(TEXT("max"));
 	for (double M : MaxB) { W->WriteValue(M); }
 	W->WriteArrayEnd();
+	W->WriteObjectEnd();
+
+	if (bHasWP)
+	{
+		W->WriteObjectStart(TEXT("world_partition_bounds"));
+		W->WriteArrayStart(TEXT("min")); W->WriteValue(WPBounds.Min.X); W->WriteValue(WPBounds.Min.Y); W->WriteValue(WPBounds.Min.Z); W->WriteArrayEnd();
+		W->WriteArrayStart(TEXT("max")); W->WriteValue(WPBounds.Max.X); W->WriteValue(WPBounds.Max.Y); W->WriteValue(WPBounds.Max.Z); W->WriteArrayEnd();
+		W->WriteObjectEnd();
+	}
+	else
+	{
+		W->WriteNull(TEXT("world_partition_bounds"));
+	}
+
+	// Tight content extent (frames the bulk of the geometry; used by Bounds Source = Scene).
+	W->WriteObjectStart(TEXT("content_bounds"));
+	W->WriteArrayStart(TEXT("min")); W->WriteValue(ContentMin[0]); W->WriteValue(ContentMin[1]); W->WriteValue(ContentMin[2]); W->WriteArrayEnd();
+	W->WriteArrayStart(TEXT("max")); W->WriteValue(ContentMax[0]); W->WriteValue(ContentMax[1]); W->WriteValue(ContentMax[2]); W->WriteArrayEnd();
 	W->WriteObjectEnd();
 
 	W->WriteArrayStart(TEXT("navmesh_volumes"));
@@ -376,6 +453,52 @@ FString FCameraProfilingTools::ExportSceneData()
 	return OutPath;
 }
 
+FBox FCameraProfilingTools::ResolveExtent(const TSharedPtr<FJsonObject>& Scene)
+{
+	const UCameraProfilingSettings* S = GetDefault<UCameraProfilingSettings>();
+	auto ReadBox = [](const TSharedPtr<FJsonObject>& Obj) -> FBox
+	{
+		const TArray<TSharedPtr<FJsonValue>> Mn = Obj->GetArrayField(TEXT("min"));
+		const TArray<TSharedPtr<FJsonValue>> Mx = Obj->GetArrayField(TEXT("max"));
+		return FBox(FVector(Mn[0]->AsNumber(), Mn[1]->AsNumber(), Mn[2]->AsNumber()),
+		            FVector(Mx[0]->AsNumber(), Mx[1]->AsNumber(), Mx[2]->AsNumber()));
+	};
+
+	// World Partition extent (matches the grid when Bounds Source = WorldPartition).
+	if (S->BoundsSource == ECameraBoundsSource::WorldPartition)
+	{
+		const TSharedPtr<FJsonObject>* WP = nullptr;
+		if (Scene->TryGetObjectField(TEXT("world_partition_bounds"), WP) && WP && WP->IsValid())
+		{
+			return ReadBox(*WP);
+		}
+	}
+
+	// NavMesh-volume union.
+	if (S->BoundsSource == ECameraBoundsSource::NavMesh)
+	{
+		const TArray<TSharedPtr<FJsonValue>>* Vols = nullptr;
+		if (Scene->TryGetArrayField(TEXT("navmesh_volumes"), Vols) && Vols && Vols->Num() > 0)
+		{
+			FBox Box(ForceInit);
+			for (const TSharedPtr<FJsonValue>& V : *Vols)
+			{
+				Box += ReadBox(V->AsObject());
+			}
+			return Box;
+		}
+	}
+
+	// Scene (default): percentile-trimmed content bounds (frames the bulk of geometry, ignoring
+	// far-flung outliers), falling back to raw bounds.
+	const TSharedPtr<FJsonObject>* Content = nullptr;
+	if (Scene->TryGetObjectField(TEXT("content_bounds"), Content) && Content && Content->IsValid())
+	{
+		return ReadBox(*Content);
+	}
+	return ReadBox(Scene->GetObjectField(TEXT("bounds")));
+}
+
 bool FCameraProfilingTools::CaptureTopdown()
 {
 	UWorld* World = EditorWorld();
@@ -395,48 +518,88 @@ bool FCameraProfilingTools::CaptureTopdown()
 		UE_LOG(LogCameraProfilingEditor, Warning, TEXT("[topdown] no scene_data.json; run export first."));
 		return false;
 	}
-	const TSharedPtr<FJsonObject> Bounds = Scene->GetObjectField(TEXT("bounds"));
-	const TArray<TSharedPtr<FJsonValue>> Mn = Bounds->GetArrayField(TEXT("min"));
-	const TArray<TSharedPtr<FJsonValue>> Mx = Bounds->GetArrayField(TEXT("max"));
-	const double MinX = Mn[0]->AsNumber(), MinY = Mn[1]->AsNumber();
-	const double MaxX = Mx[0]->AsNumber(), MaxY = Mx[1]->AsNumber(), MaxZ = Mx[2]->AsNumber();
+	// Capture over the same extent the grid uses (so the render lines up with the cells / WP bound).
+	const FBox Extent = ResolveExtent(Scene);
+	const double MinX = Extent.Min.X, MinY = Extent.Min.Y;
+	const double MaxX = Extent.Max.X, MaxY = Extent.Max.Y, MaxZ = Extent.Max.Z;
 
 	const double CX = (MinX + MaxX) * 0.5, CY = (MinY + MaxY) * 0.5;
 	const double Span = FMath::Max3(1.0, MaxX - MinX, MaxY - MinY);
 	const double Half = Span * 0.5;
 	const int32 Px = FMath::Max(256, S->TopdownPx);
 
-	UTextureRenderTarget2D* RT = UKismetRenderingLibrary::CreateRenderTarget2D(World, Px, Px, RTF_RGBA8);
+	// sRGB target so the exported PNG is in display space (a plain RGBA8 target stores linear base
+	// color, which the editor previews correctly but exports dark — the cause of the "black" map).
+	UTextureRenderTarget2D* RT = UKismetRenderingLibrary::CreateRenderTarget2D(World, Px, Px, RTF_RGBA8_SRGB);
 	if (!RT)
 	{
 		return false;
 	}
 
-	// pitch -90 (straight down), yaw 90 (orient so the PNG lines up with the heat-map grid).
-	// Transient throwaway actor: don't let a one-shot render capture dirty/save the level.
-	FActorSpawnParameters SpawnParams;
-	SpawnParams.ObjectFlags |= RF_Transient;
-	ASceneCapture2D* Cap = World->SpawnActor<ASceneCapture2D>(
-		FVector(CX, CY, MaxZ + 50000.0), FRotator(-90.0, 90.0, 0.0), SpawnParams);
+	// Find-or-spawn a PERSISTENT (per-session) top-down capture actor so you can select / pilot it in
+	// the editor to see where it's pointed and whether geometry is under it. Spawned RF_Transient so
+	// it's visible & pilotable but never saved into the level; reused (repositioned) on each refresh.
+	const FString CaptureLabel = TEXT("CameraProfiling_TopDownCapture");
+	ASceneCapture2D* Cap = nullptr;
+	for (TActorIterator<ASceneCapture2D> It(World); It; ++It)
+	{
+		if (It->GetActorLabel() == CaptureLabel) { Cap = *It; break; }
+	}
+	if (!Cap)
+	{
+		FActorSpawnParameters SpawnParams;
+		SpawnParams.ObjectFlags |= RF_Transient;
+		Cap = World->SpawnActor<ASceneCapture2D>(FVector::ZeroVector, FRotator::ZeroRotator, SpawnParams);
+		if (Cap)
+		{
+			Cap->SetActorLabel(CaptureLabel);
+			Cap->SetFolderPath(TEXT("CameraProfiling"));
+		}
+	}
 	if (!Cap)
 	{
 		return false;
 	}
+	// pitch -90 (straight down), yaw 90 (orient so the PNG lines up with the heat-map grid). Keep the
+	// camera fairly LOW over the geometry: far up, foliage/instanced meshes distance-cull (and the
+	// ortho far plane can clip), so the capture sees only the bright sky. 200m clears typical trees.
+	const FVector CapLoc(CX, CY, MaxZ + 20000.0);
+	Cap->SetActorLocationAndRotation(CapLoc, FRotator(-90.0, 90.0, 0.0));
 
 	bool bOk = false;
 	if (USceneCaptureComponent2D* Comp = Cap->GetCaptureComponent2D())
 	{
+		Comp->bCaptureEveryFrame = false;   // persistent actor: only capture when we ask
+		Comp->bCaptureOnMovement = false;
 		Comp->ProjectionType = ECameraProjectionMode::Orthographic;
 		Comp->OrthoWidth = Span;
-		Comp->CaptureSource = ESceneCaptureSource::SCS_FinalColorLDR;
+		// Unlit base color (GBuffer albedo): the sky/atmosphere isn't written to the base-color buffer,
+		// so it CANNOT wash the shot white — empty pixels come out black and geometry shows its flat
+		// color. This is the "just show me a map" render, independent of the scene's lighting.
+		Comp->CaptureSource = ESceneCaptureSource::SCS_BaseColor;
 		Comp->TextureTarget = RT;
-		if (!FMath::IsNearlyZero(S->TopdownExposureBias))
-		{
-			Comp->PostProcessSettings.bOverride_AutoExposureBias = true;
-			Comp->PostProcessSettings.AutoExposureBias = S->TopdownExposureBias;
-		}
+		// Force full draw distance so distant foliage/instanced meshes still render into the capture,
+		// then restore the project's previous value. (Distance culling can empty a high top-down shot.)
+		IConsoleVariable* ViewDistCVar = IConsoleManager::Get().FindConsoleVariable(TEXT("r.ViewDistanceScale"));
+		const float PrevViewDist = ViewDistCVar ? ViewDistCVar->GetFloat() : 1.0f;
+		if (ViewDistCVar) { ViewDistCVar->Set(50.0f); }
 		Comp->CaptureScene();
-		UKismetRenderingLibrary::ExportRenderTarget(World, RT, DataDir(), TEXT("map_topdown.png"));
+		if (ViewDistCVar) { ViewDistCVar->Set(PrevViewDist); }
+
+		// Read the RT back and write the PNG ourselves, FORCING alpha opaque. The base-color capture
+		// leaves alpha=0; ExportRenderTarget keeps it, so a browser draws the (correct RGB) map as
+		// fully transparent — the real cause of the "black map background".
+		if (FTextureRenderTargetResource* RTRes = RT->GameThread_GetRenderTargetResource())
+		{
+			TArray<FColor> Pixels;
+			if (RTRes->ReadPixels(Pixels))
+			{
+				for (FColor& Pixel : Pixels) { Pixel.A = 255; }
+				TArray64<uint8> PngData;
+				FImageUtils::PNGCompressImageArray(Px, Px, TArrayView64<const FColor>(Pixels.GetData(), Pixels.Num()), PngData);
+				FFileHelper::SaveArrayToFile(PngData, *FPaths::Combine(DataDir(), TEXT("map_topdown.png")));
+			}
+		}
 
 		FString MapJson;
 		TSharedRef<TJsonWriter<>> W = TJsonWriterFactory<>::Create(&MapJson);
@@ -449,10 +612,12 @@ bool FCameraProfilingTools::CaptureTopdown()
 		FFileHelper::SaveStringToFile(MapJson, *FPaths::Combine(DataDir(), TEXT("map_topdown.json")));
 
 		bOk = true;
-		UE_LOG(LogCameraProfilingEditor, Log, TEXT("[topdown] wrote map_topdown.png (%dpx, span %.0fuu)."), Px, Span);
+		UE_LOG(LogCameraProfilingEditor, Log,
+			TEXT("[topdown] wrote map_topdown.png: %dpx, center=(%.0f, %.0f), span=%.0fuu, camZ=%.0f. ")
+			TEXT("Capture actor '%s' left in level (folder 'CameraProfiling') — select it / pilot it (Ctrl+Shift+P) to inspect."),
+			Px, CX, CY, Span, CapLoc.Z, *CaptureLabel);
 	}
 
-	World->EditorDestroyActor(Cap, /*bShouldModifyLevel=*/false);
 	return bOk;
 }
 
@@ -470,35 +635,20 @@ FString FCameraProfilingTools::GenerateCameraGrid(int32 GridX, int32 GridY)
 		return FString();
 	}
 
-	// Choose extent: union of NavMesh volumes, or whole-scene bounds.
-	double BMin[3], BMax[3];
+	// Extent shared with the top-down render + heat map (resolved per Bounds Source). Volumes are still
+	// read here for the on-navmesh point filter below.
 	const TArray<TSharedPtr<FJsonValue>>* Volumes = nullptr;
-	const bool bWantNav = (S->BoundsSource == ECameraBoundsSource::NavMesh);
 	const bool bHaveVolumes = Scene->TryGetArrayField(TEXT("navmesh_volumes"), Volumes) && Volumes && Volumes->Num() > 0;
-	const bool bUseNav = bWantNav && bHaveVolumes;
+	const bool bUseNav = (S->BoundsSource == ECameraBoundsSource::NavMesh) && bHaveVolumes;
+	const TSharedPtr<FJsonObject>* WPCheck = nullptr;
+	const bool bHaveWP = Scene->TryGetObjectField(TEXT("world_partition_bounds"), WPCheck) && WPCheck && WPCheck->IsValid();
 
-	if (bUseNav)
-	{
-		for (int32 i = 0; i < 3; ++i) { BMin[i] = TNumericLimits<double>::Max(); BMax[i] = TNumericLimits<double>::Lowest(); }
-		for (const TSharedPtr<FJsonValue>& V : *Volumes)
-		{
-			const TSharedPtr<FJsonObject> Obj = V->AsObject();
-			const TArray<TSharedPtr<FJsonValue>> VMin = Obj->GetArrayField(TEXT("min"));
-			const TArray<TSharedPtr<FJsonValue>> VMax = Obj->GetArrayField(TEXT("max"));
-			for (int32 i = 0; i < 3; ++i)
-			{
-				BMin[i] = FMath::Min(BMin[i], VMin[i]->AsNumber());
-				BMax[i] = FMath::Max(BMax[i], VMax[i]->AsNumber());
-			}
-		}
-	}
-	else
-	{
-		const TSharedPtr<FJsonObject> Bounds = Scene->GetObjectField(TEXT("bounds"));
-		const TArray<TSharedPtr<FJsonValue>> Mn = Bounds->GetArrayField(TEXT("min"));
-		const TArray<TSharedPtr<FJsonValue>> Mx = Bounds->GetArrayField(TEXT("max"));
-		for (int32 i = 0; i < 3; ++i) { BMin[i] = Mn[i]->AsNumber(); BMax[i] = Mx[i]->AsNumber(); }
-	}
+	const FBox Extent = ResolveExtent(Scene);
+	double BMin[3] = { Extent.Min.X, Extent.Min.Y, Extent.Min.Z };
+	double BMax[3] = { Extent.Max.X, Extent.Max.Y, Extent.Max.Z };
+	const TCHAR* SourceName =
+		(S->BoundsSource == ECameraBoundsSource::WorldPartition && bHaveWP) ? TEXT("worldpartition")
+		: bUseNav ? TEXT("navmesh") : TEXT("scene");
 
 	auto InsideNavmesh = [&](double Px, double Py) -> bool
 	{
@@ -527,7 +677,9 @@ FString FCameraProfilingTools::GenerateCameraGrid(int32 GridX, int32 GridY)
 	const double CellW = (MaxXY[0] - MinXY[0]) / NX;
 	const double CellH = (MaxXY[1] - MinXY[1]) / NY;
 	const double Jitter = FMath::Clamp((double)S->Jitter, 0.0, 1.0);
-	const double Z = S->TraceExtraHeight; // nominal Z (overwritten by the ground hit at spawn)
+	// Nominal Z = top of the content, so the spawn-time down-trace starts ABOVE the terrain. A fixed
+	// height fails on maps whose ground sits far from 0 (e.g. Electric Dreams). Overwritten by the hit.
+	const double Z = BMax[2];
 
 	// Cluster centers for aiming.
 	TArray<FVector2D> ClusterXY;
@@ -567,7 +719,7 @@ FString FCameraProfilingTools::GenerateCameraGrid(int32 GridX, int32 GridY)
 	Wr->WriteValue(TEXT("jitter"), Jitter);
 	Wr->WriteValue(TEXT("padding"), Pad);
 	Wr->WriteValue(TEXT("nominal_z"), Z);
-	Wr->WriteValue(TEXT("bounds_source"), bUseNav ? TEXT("navmesh") : TEXT("scene"));
+	Wr->WriteValue(TEXT("bounds_source"), SourceName);
 	Wr->WriteObjectEnd();
 
 	int32 CamCount = 0, Dropped = 0;

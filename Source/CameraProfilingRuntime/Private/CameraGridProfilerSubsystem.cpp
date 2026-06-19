@@ -8,6 +8,8 @@
 #include "HighResScreenshot.h"
 #include "Kismet/GameplayStatics.h"
 #include "UnrealClient.h"
+#include "Components/WorldPartitionStreamingSourceComponent.h"
+#include "WorldPartition/WorldPartition.h"
 
 #include "HAL/FileManager.h"
 #include "Misc/CommandLine.h"
@@ -187,6 +189,16 @@ void UCameraGridProfilerSubsystem::BeginRun()
 	FActorSpawnParameters Params;
 	Params.ObjectFlags |= RF_Transient;
 	ViewCam = World->SpawnActor<ACameraActor>(Cameras[0].Location, Cameras[0].Rotation, Params);
+
+	// On a World Partition map, make the view camera a streaming source so cells stream in around each
+	// profiled camera as it moves (otherwise the trace/screenshot capture unloaded geometry or HLOD).
+	if (ViewCam && World->GetWorldPartition())
+	{
+		UWorldPartitionStreamingSourceComponent* StreamSource =
+			NewObject<UWorldPartitionStreamingSourceComponent>(ViewCam, TEXT("CameraProfileStreamingSource"));
+		StreamSource->RegisterComponent();
+		UE_LOG(LogCameraProfile, Display, TEXT("[CameraProfile] World Partition detected; view camera registered as a streaming source."));
+	}
 
 	if (APlayerController* PC = UGameplayStatics::GetPlayerController(World, 0))
 	{

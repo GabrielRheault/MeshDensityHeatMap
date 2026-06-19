@@ -20,6 +20,8 @@ public class CameraProfilingEditor : ModuleRules
 			"ToolMenus",         // Tools -> Yes Chef menu
 			"Slate",
 			"SlateCore",
+			"PropertyEditor",        // settings details view in the dockable panel
+			"WorkspaceMenuStructure", // Window-menu category for the panel tab
 			"Json",              // scene_data.json / camera_*.json
 			"Projects",          // IPluginManager -> Resources/heatmap_template.html
 			"RenderCore",        // FStaticMeshLODResources::GetNumTriangles

@@ -9,6 +9,7 @@
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
 #include "StaticMeshResources.h"
+#include "WorldPartition/HLOD/HLODActor.h"
 
 #include "Interfaces/IPluginManager.h"
 #include "HAL/PlatformProcess.h"
@@ -87,7 +88,22 @@ bool FCameraProfilingTools::WriteHeatmap(bool bOpenBrowser)
 
 	// Assemble the payload the template expects at /*__DATA__*/.
 	TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
-	Payload->SetField(TEXT("bounds"), MakeShared<FJsonValueObject>(Scene->GetObjectField(TEXT("bounds"))));
+
+	// Canvas extent = the same bounds the grid/top-down render use (so cells, cameras, and the map
+	// overlay all share one coordinate space, per the configured Bounds Source).
+	const FBox Extent = FCameraProfilingTools::ResolveExtent(Scene);
+	auto BoundsArr = [](double X, double Y, double Z)
+	{
+		TArray<TSharedPtr<FJsonValue>> A;
+		A.Add(MakeShared<FJsonValueNumber>(X));
+		A.Add(MakeShared<FJsonValueNumber>(Y));
+		A.Add(MakeShared<FJsonValueNumber>(Z));
+		return A;
+	};
+	TSharedRef<FJsonObject> BoundsObj = MakeShared<FJsonObject>();
+	BoundsObj->SetArrayField(TEXT("min"), BoundsArr(Extent.Min.X, Extent.Min.Y, Extent.Min.Z));
+	BoundsObj->SetArrayField(TEXT("max"), BoundsArr(Extent.Max.X, Extent.Max.Y, Extent.Max.Z));
+	Payload->SetObjectField(TEXT("bounds"), BoundsObj);
 	Payload->SetField(TEXT("map"), MapMeta.IsValid()
 		? StaticCastSharedRef<FJsonValue>(MakeShared<FJsonValueObject>(MapMeta))
 		: StaticCastSharedRef<FJsonValue>(MakeShared<FJsonValueNull>()));
@@ -175,7 +191,7 @@ FString FCameraProfilingTools::InspectCell(double MinX, double MinY, double Size
 		for (TActorIterator<AActor> It(World); It; ++It)
 		{
 			AActor* Actor = *It;
-			if (!Actor || Actor->IsA<ACameraActor>())
+			if (!Actor || Actor->IsA<ACameraActor>() || Actor->IsA<AWorldPartitionHLOD>())
 			{
 				continue;
 			}
