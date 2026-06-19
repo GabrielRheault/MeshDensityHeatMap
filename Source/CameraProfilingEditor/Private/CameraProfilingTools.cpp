@@ -867,7 +867,12 @@ int32 FCameraProfilingTools::SpawnCameras()
 		if (!bFound)
 		{
 			++Skipped;
-			UE_LOG(LogCameraProfilingEditor, Warning, TEXT("[spawn] camera %d: no valid spot near (%.0f,%.0f); skipped."), Idx, X, Y);
+			// Diagnose WHY: did the down-trace hit any collision at all under this point?
+			const bool bGroundHit = ResolveGroundZ(World, X, Y, NominalZ).IsSet();
+			UE_LOG(LogCameraProfilingEditor, Warning, TEXT("[spawn] camera %d near (%.0f,%.0f) skipped: %s"),
+				Idx, X, Y,
+				bGroundHit ? TEXT("ground hit but off-navmesh (only happens in NavMesh bounds mode)")
+				           : TEXT("down-trace hit NO collision under this point (geometry likely has collision disabled)"));
 			++Idx;
 			continue;
 		}
