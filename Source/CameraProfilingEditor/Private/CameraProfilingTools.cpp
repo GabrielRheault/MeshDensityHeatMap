@@ -145,14 +145,48 @@ namespace
 		TEXT("scene_data.json"), TEXT("camera_positions.json"), TEXT("camera_grid.json"),
 		TEXT("map_topdown.png"), TEXT("map_topdown.json")
 	};
+
+	/** Byte-compare two text files; false if either is missing. */
+	bool TextFilesEqual(const FString& A, const FString& B)
+	{
+		FString SA, SB;
+		return FFileHelper::LoadFileToString(SA, *A) && FFileHelper::LoadFileToString(SB, *B)
+			&& SA.Equals(SB, ESearchCase::CaseSensitive);
+	}
 }
 
 void FCameraProfilingTools::SnapshotGeneration()
 {
 	IFileManager& FM = IFileManager::Get();
 	const FString Src = DataDir();
+
+	// Skip archiving when this generation is identical to the most recent one (same level + same camera
+	// layout) -- compared by the JSON outputs, ignoring the rendered PNG (its encoding can vary). Keeps
+	// the history a log of *changes*, not duplicate clicks.
+	const TArray<FString> Prev = ListSnapshots();
+	if (Prev.Num() > 0)
+	{
+		const FString PrevDir = FPaths::Combine(HistoryRoot(), Prev[0]);
+		bool bIdentical = true;
+		for (const TCHAR* F : GGenerationFiles)
+		{
+			if (!FString(F).EndsWith(TEXT(".json"))) { continue; }
+			if (!TextFilesEqual(FPaths::Combine(Src, F), FPaths::Combine(PrevDir, F))) { bIdentical = false; break; }
+		}
+		if (bIdentical)
+		{
+			UE_LOG(LogCameraProfilingEditor, Log, TEXT("[history] generation identical to '%s'; not archived."), *Prev[0]);
+			return;
+		}
+	}
+
+	// Unique timestamped folder (suffix if a second generation lands in the same second).
 	const FString Stamp = FDateTime::Now().ToString(TEXT("%Y-%m-%d_%H-%M-%S"));
-	const FString Dest = FPaths::Combine(HistoryRoot(), Stamp);
+	FString Dest = FPaths::Combine(HistoryRoot(), Stamp);
+	for (int32 N = 2; FM.DirectoryExists(*Dest); ++N)
+	{
+		Dest = FPaths::Combine(HistoryRoot(), FString::Printf(TEXT("%s-%d"), *Stamp, N));
+	}
 	FM.MakeDirectory(*Dest, /*Tree=*/true);
 
 	int32 Copied = 0;
@@ -162,7 +196,7 @@ void FCameraProfilingTools::SnapshotGeneration()
 		if (FM.FileExists(*S) && FM.Copy(*FPaths::Combine(Dest, F), *S) == COPY_OK) { ++Copied; }
 	}
 	UE_LOG(LogCameraProfilingEditor, Log, TEXT("[history] archived generation '%s' (%d files) -> %s"),
-		*Stamp, Copied, *Dest);
+		*FPaths::GetCleanFilename(Dest), Copied, *Dest);
 }
 
 TArray<FString> FCameraProfilingTools::ListSnapshots()
