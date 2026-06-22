@@ -68,8 +68,9 @@ public:
 	/** Timestamp folder names of past generations, newest first. */
 	static TArray<FString> ListSnapshots();
 
-	/** Restore a past generation's files as the current data set and (re)open its heat map. */
-	static bool LoadSnapshot(const FString& Name);
+	/** Restore a past generation's files as the current data set and rebuild the heat map (optionally
+	 *  launching the browser). Called by the heat map's Generation dropdown via the localhost bridge. */
+	static bool LoadSnapshot(const FString& Name, bool bOpenBrowser);
 
 private:
 	/** The editor world, or nullptr. */

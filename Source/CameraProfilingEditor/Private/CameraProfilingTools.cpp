@@ -172,9 +172,15 @@ TArray<FString> FCameraProfilingTools::ListSnapshots()
 	return Dirs;
 }
 
-bool FCameraProfilingTools::LoadSnapshot(const FString& Name)
+bool FCameraProfilingTools::LoadSnapshot(const FString& Name, bool bOpenBrowser)
 {
 	IFileManager& FM = IFileManager::Get();
+	// Guard against path traversal from the (file://) page: accept a plain folder name only.
+	if (Name.IsEmpty() || Name.Contains(TEXT("/")) || Name.Contains(TEXT("\\")) || Name.Contains(TEXT("..")))
+	{
+		UE_LOG(LogCameraProfilingEditor, Warning, TEXT("[history] rejected snapshot name '%s'."), *Name);
+		return false;
+	}
 	const FString Src = FPaths::Combine(HistoryRoot(), Name);
 	if (!FM.DirectoryExists(*Src))
 	{
@@ -190,7 +196,7 @@ bool FCameraProfilingTools::LoadSnapshot(const FString& Name)
 	}
 	UE_LOG(LogCameraProfilingEditor, Log, TEXT("[history] restored generation '%s' (%d files); rebuilding heat map."),
 		*Name, Copied);
-	return WriteHeatmap(/*bOpenBrowser=*/true);
+	return WriteHeatmap(bOpenBrowser);
 }
 
 TOptional<double> FCameraProfilingTools::ResolveGroundZ(UWorld* World, double X, double Y, double NominalZ)

@@ -37,6 +37,9 @@
   <label><input type="checkbox" id="cbNav"> NavMesh</label>
   <label><input type="checkbox" id="cbMap"> Map</label>
   <label title="Heat opacity over the map">Heat <input type="range" id="heatOp" min="0" max="100" value="65" style="width:70px;vertical-align:middle"></label>
+  <label id="genWrap" title="Load a past Generate Data run (needs the editor open)" style="display:none">Generation
+    <select id="genSel"></select>
+  </label>
   <span style="margin-left:auto;color:#9aa0a8">scroll = zoom &nbsp;&middot;&nbsp; drag = pan &nbsp;&middot;&nbsp; double-click = reset</span>
 </header>
 <div id="wrap">
@@ -562,6 +565,32 @@ cbMap.addEventListener('change', ensureMapLoaded);  // load the background image
 metricSel.addEventListener('change', () => { metricIdx = +metricSel.value; draw(); });
 heatOp.addEventListener('input', draw);
 document.getElementById('selInUnreal').addEventListener('click', runInspect);
+
+// --- generation history: load a past Generate Data run via the editor bridge ---
+// (file:// pages can't read local files, so this goes through the editor; only works while it's open.)
+const genWrap = document.getElementById('genWrap');
+const genSel = document.getElementById('genSel');
+if (GOTO){
+  fetch(`${GOTO}/snapshots`)
+    .then(r => r.ok ? r.json() : [])
+    .then(names => {
+      if (!Array.isArray(names) || !names.length) return;
+      genSel.innerHTML = '<option selected disabled>load a generation…</option>'
+        + names.map(n => `<option value="${n}">${n}</option>`).join('');
+      genWrap.style.display = '';
+    })
+    .catch(() => {});  // editor not running -> leave the control hidden
+}
+genSel.addEventListener('change', () => {
+  const name = genSel.value;
+  if (!name || !GOTO) return;
+  // Editor restores that generation's data + rebuilds this HTML; reload to show it.
+  fetch(`${GOTO}/loadsnapshot?name=${encodeURIComponent(name)}`)
+    .then(r => r.json())
+    .then(res => { if (res && res.ok) location.reload(); else alert('Could not load that generation.'); })
+    .catch(() => alert('Editor not reachable (is it open?).'));
+});
+
 draw();
 </script>
 </body>
