@@ -37,7 +37,7 @@
   <label><input type="checkbox" id="cbNav"> NavMesh</label>
   <label><input type="checkbox" id="cbMap"> Map</label>
   <label title="Heat opacity over the map">Heat <input type="range" id="heatOp" min="0" max="100" value="65" style="width:70px;vertical-align:middle"></label>
-  <label id="genWrap" title="Load a past Generate Data run (needs the editor open)" style="display:none">Generation
+  <label id="genWrap" title="Load a past Generate Data run (needs the editor open)">Generation
     <select id="genSel"></select>
   </label>
   <span style="margin-left:auto;color:#9aa0a8">scroll = zoom &nbsp;&middot;&nbsp; drag = pan &nbsp;&middot;&nbsp; double-click = reset</span>
@@ -579,18 +579,19 @@ document.getElementById('selInUnreal').addEventListener('click', runInspect);
 
 // --- generation history: load a past Generate Data run via the editor bridge ---
 // (file:// pages can't read local files, so this goes through the editor; only works while it's open.)
-const genWrap = document.getElementById('genWrap');
 const genSel = document.getElementById('genSel');
+// Always present (stable header); a placeholder shows until the editor's /snapshots fills it in.
+genSel.innerHTML = '<option selected disabled>generations…</option>';
 if (GOTO){
   fetch(`${GOTO}/snapshots`)
     .then(r => r.ok ? r.json() : [])
     .then(names => {
-      if (!Array.isArray(names) || !names.length) return;
-      genSel.innerHTML = '<option selected disabled>load a generation…</option>'
-        + names.map(n => `<option value="${n}">${n}</option>`).join('');
-      genWrap.style.display = '';
+      if (Array.isArray(names) && names.length){
+        genSel.innerHTML = '<option selected disabled>load a generation…</option>'
+          + names.map(n => `<option value="${n}">${n}</option>`).join('');
+      }
     })
-    .catch(() => {});  // editor not running -> leave the control hidden
+    .catch(() => {});  // editor not running -> keep the placeholder
 }
 genSel.addEventListener('change', () => {
   const name = genSel.value;

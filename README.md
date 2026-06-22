@@ -170,8 +170,9 @@ camera, and a single memreport at the end).
   (the map is **on by default** when an image exists).
 - **Heat** slider — opacity of the heat over the map image.
 - **Generation** dropdown — switch the map to a past **Generate Data** run (from `data/history/`). Picking
-  one asks the editor to restore that generation and the page reloads showing it. Only appears while the
-  **editor is open** (it goes through the localhost bridge, since a `file://` page can't read local files).
+  one asks the editor to restore that generation and the page reloads showing it. It's always shown; it
+  only **populates** while the **editor is open** (it goes through the localhost bridge, since a `file://`
+  page can't read local files) — otherwise it shows a placeholder.
 - **scroll** = zoom · **drag** = pan · **double-click** = reset. Zooming subdivides the grid (LODs); only
   on-screen cells are drawn, so it stays fast on big maps.
 
