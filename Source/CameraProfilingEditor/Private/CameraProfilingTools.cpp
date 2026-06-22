@@ -33,6 +33,7 @@
 #include "HAL/IConsoleManager.h"
 #include "Math/RandomStream.h"
 #include "Misc/DateTime.h"
+#include "Misc/EngineVersion.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 
@@ -118,6 +119,33 @@ namespace
 		}
 		double Unused;
 		return ProjectNav(World, FVector(X, Y, Z), FVector(50.0, 50.0, ToleranceZ), Unused);
+	}
+
+	/** Log a self-contained context block (engine/plugin/world/settings) so a user's Output Log alone is
+	 *  enough to diagnose most issues -- no need to send the whole level. */
+	void LogDiagnostics(UWorld* World)
+	{
+		const UCameraProfilingSettings* S = GetDefault<UCameraProfilingSettings>();
+		UE_LOG(LogCameraProfilingEditor, Log, TEXT("[diag] ---- Camera Profiling ---- built %s %s, engine %s"),
+			TEXT(__DATE__), TEXT(__TIME__), *FEngineVersion::Current().ToString());
+		if (World)
+		{
+			UE_LOG(LogCameraProfilingEditor, Log, TEXT("[diag] world '%s' (WorldType=%d, WorldPartition=%s, NavSystem=%s)"),
+				*World->GetMapName(), (int32)World->WorldType,
+				World->GetWorldPartition() ? TEXT("yes") : TEXT("no"),
+				NavSystem(World) ? TEXT("present") : TEXT("absent"));
+		}
+		else
+		{
+			UE_LOG(LogCameraProfilingEditor, Warning, TEXT("[diag] NO editor world."));
+		}
+		const TCHAR* BoundsName = (S->BoundsSource == ECameraBoundsSource::WorldPartition) ? TEXT("WorldPartition")
+			: (S->BoundsSource == ECameraBoundsSource::NavMesh) ? TEXT("NavMesh") : TEXT("Scene");
+		UE_LOG(LogCameraProfilingEditor, Log,
+			TEXT("[diag] settings: BoundsSource=%s Grid=%dx%d Padding=%.2f Jitter=%.2f Aim=%d Height=%.0f Trace=+%.0f/-%.0f Subdiv=%d ClusterCell=%.0f ExportInstances=%d ProfileMode=%s GotoPort=%d"),
+			BoundsName, S->GridResolution.X, S->GridResolution.Y, S->Padding, S->Jitter, S->bAimAtClusters ? 1 : 0,
+			S->HeightAboveGround, S->TraceExtraHeight, S->TraceDepth, S->HeatmapSubdiv, S->ClusterCellSize,
+			S->bExportInstances ? 1 : 0, (S->ProfileMode == ECameraProfileMode::PIE) ? TEXT("PIE") : TEXT("Editor"), S->GotoPort);
 	}
 }
 
@@ -280,6 +308,7 @@ TOptional<double> FCameraProfilingTools::ResolveGroundZ(UWorld* World, double X,
 FString FCameraProfilingTools::ExportSceneData()
 {
 	UWorld* World = EditorWorld();
+	LogDiagnostics(World); // context block first, so the log self-explains even on early failure
 	if (!World)
 	{
 		UE_LOG(LogCameraProfilingEditor, Warning, TEXT("[export] no editor world."));
@@ -620,6 +649,10 @@ FString FCameraProfilingTools::ExportSceneData()
 	UE_LOG(LogCameraProfilingEditor, Log,
 		TEXT("[export] %d actors, %d placements, %d clusters, %d navmesh volume(s), %d dynamic light(s); triangles=%.0f draws=%lld -> %s"),
 		ActorCount, PointCount, Clusters.Num(), NavVolumes.Num(), LightCount, TotalTris, TotalDraws, *OutPath);
+	UE_LOG(LogCameraProfilingEditor, Log,
+		TEXT("[export] bounds min=(%.0f,%.0f,%.0f) max=(%.0f,%.0f,%.0f); content X[%.0f,%.0f] Y[%.0f,%.0f]; WorldPartition=%s"),
+		MinB[0], MinB[1], MinB[2], MaxB[0], MaxB[1], MaxB[2],
+		ContentMin[0], ContentMax[0], ContentMin[1], ContentMax[1], bHasWP ? TEXT("yes") : TEXT("no"));
 	return OutPath;
 }
 
