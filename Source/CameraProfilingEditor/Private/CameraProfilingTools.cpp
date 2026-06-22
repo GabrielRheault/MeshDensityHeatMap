@@ -1004,13 +1004,36 @@ int32 FCameraProfilingTools::SpawnCameras()
 	return Spawned;
 }
 
-void FCameraProfilingTools::GenerateCameras(int32 GridX, int32 GridY)
+void FCameraProfilingTools::GenerateData(int32 GridX, int32 GridY)
 {
+	// Always refresh the scanned data (density incl. lights + top-down render).
 	if (ExportSceneData().IsEmpty())
 	{
 		return;
 	}
 	CaptureTopdown();
+
+	// Only lay out + spawn a fresh camera grid when there isn't one yet. If GridCam_* cameras already
+	// exist in the CameraGrid folder, keep them -- this run just refreshes the heat-map data on the
+	// existing layout. (To lay out a new grid, delete the existing cameras first, then run this.)
+	const UCameraProfilingSettings* S = GetDefault<UCameraProfilingSettings>();
+	const FName Folder(*S->OutlinerFolder);
+	int32 Existing = 0;
+	if (UWorld* World = EditorWorld())
+	{
+		for (TActorIterator<ACameraActor> It(World); It; ++It)
+		{
+			if (It->GetFolderPath() == Folder) { ++Existing; }
+		}
+	}
+	if (Existing > 0)
+	{
+		UE_LOG(LogCameraProfilingEditor, Log,
+			TEXT("[generate] %d camera(s) already in '%s'; kept (data refreshed only). Delete them to lay out a new grid."),
+			Existing, *S->OutlinerFolder);
+		return;
+	}
+
 	if (GenerateCameraGrid(GridX, GridY).IsEmpty())
 	{
 		return;

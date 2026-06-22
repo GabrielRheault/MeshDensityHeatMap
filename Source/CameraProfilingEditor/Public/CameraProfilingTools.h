@@ -15,9 +15,10 @@ public:
 	/** <ProjectSaved>/CameraProfiling/data (created on demand). */
 	static FString DataDir();
 
-	/** Full "Generate Cameras" action: export scene data + top-down render, build the grid at
-	 *  [GridX, GridY] (<=0 uses the configured GridResolution), then spawn the cameras. */
-	static void GenerateCameras(int32 GridX, int32 GridY);
+	/** "Generate Data" action: re-scan the level (scene_data.json + top-down render), then build the grid
+	 *  at [GridX, GridY] (<=0 uses the configured GridResolution) and spawn cameras ONLY if the CameraGrid
+	 *  folder is empty -- if cameras already exist they're kept and this just refreshes the data. */
+	static void GenerateData(int32 GridX, int32 GridY);
 
 	/** Scan the level -> scene_data.json (bounds, navmesh volumes, density grid w/ true triangles,
 	 *  asset clusters). Returns the written path, or empty on failure. */
@@ -43,9 +44,6 @@ public:
 	// --- Phase 2: heat map ---
 	/** Build density_heatmap.html from scene_data.json (+ overlay) and optionally open it. */
 	static bool WriteHeatmap(bool bOpenBrowser);
-
-	/** Re-scan the level (export + top-down) WITHOUT touching cameras, then rebuild + open the heat map. */
-	static void RefreshHeatmapData();
 
 	/** Select the static-mesh placements inside the cell [Min, Max] (discrete actors + individual
 	 *  instances) and return a JSON per-mesh breakdown (heaviest by triangles first). */

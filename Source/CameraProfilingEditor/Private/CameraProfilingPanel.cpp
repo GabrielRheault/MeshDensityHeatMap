@@ -89,7 +89,7 @@ namespace
 						[
 							ActionButton(LOCTEXT("Generate", "1. Generate Data (cameras + JSON)"),
 								LOCTEXT("GenerateTip", "Scan the level into scene_data.json (density incl. lights) + a top-down render, build the camera grid at the resolution above, and spawn the GridCam cameras."),
-								[]() { FCameraProfilingTools::GenerateCameras(0, 0); })
+								[]() { FCameraProfilingTools::GenerateData(0, 0); })
 						]
 						+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 2.f)
 						[

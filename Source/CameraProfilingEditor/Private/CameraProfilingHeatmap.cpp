@@ -192,15 +192,6 @@ bool FCameraProfilingTools::WriteHeatmap(bool bOpenBrowser)
 	return true;
 }
 
-void FCameraProfilingTools::RefreshHeatmapData()
-{
-	if (ExportSceneData().IsEmpty())
-	{
-		return;
-	}
-	CaptureTopdown();
-	WriteHeatmap(/*bOpenBrowser=*/true);
-}
 
 FString FCameraProfilingTools::InspectCell(double MinX, double MinY, double Size)
 {
