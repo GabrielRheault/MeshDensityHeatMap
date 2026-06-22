@@ -29,6 +29,7 @@
       <option value="0">Instances</option>
       <option value="1">Triangles</option>
       <option value="2">Draw calls (est.)</option>
+      <option value="3">Lights (overlap cost)</option>
     </select>
   </label>
   <label title="Map color by log(value) so sparse/medium/dense areas are distinguishable instead of everything but the hottest cells looking the same."><input type="checkbox" id="cbLog"> Balance colors</label>
@@ -62,6 +63,7 @@
     <div class="stat">Instances: <b id="selInst">-</b></div>
     <div class="stat">Triangles: <b id="selVerts">-</b></div>
     <div class="stat">Draw calls (est.): <b id="selDraws">-</b></div>
+    <div class="stat">Lights (overlap): <b id="selLights">-</b></div>
     <div class="stat">Rank (this metric): <b id="selRank">-</b></div>
     <div class="stat">% of densest: <b id="selPct">-</b></div>
     <div class="stat">Center (X, Y): <b id="selCenter">-</b></div>
@@ -106,7 +108,7 @@ cbNav.checked = opts.show_navmesh !== false && (DATA.navmesh||[]).length > 0;
 
 let metricIdx = 0;  // 0 = instances, 1 = vertices, 2 = draws
 const metricSel = document.getElementById('metricSel');
-const METRIC_LABELS = ['Instances', 'Triangles', 'Draw calls'];
+const METRIC_LABELS = ['Instances', 'Triangles', 'Draw calls', 'Lights'];
 // Old scene_data.json only had [ix,iy,instances]; if there's no metrics list, vertices/draws are 0.
 const hasMetrics = !!(DATA.density && DATA.density.metrics);
 
@@ -161,14 +163,14 @@ const baseCell = (DATA.density && DATA.density.base_cell) ? DATA.density.base_ce
 // track a separate max per metric (so the legend/colors rescale when you switch metric).
 function buildLod(factor){
   const m = new Map();
-  const maxes = [0, 0, 0];
+  const maxes = [0, 0, 0, 0];
   if (FINE){
     for (const row of FINE){
       const k = Math.floor(row[0]/factor) + ',' + Math.floor(row[1]/factor);
       let cell = m.get(k);
-      if (!cell){ cell = [0, 0, 0]; m.set(k, cell); }
-      cell[0] += row[2] || 0; cell[1] += row[3] || 0; cell[2] += row[4] || 0;
-      for (let i = 0; i < 3; i++) if (cell[i] > maxes[i]) maxes[i] = cell[i];
+      if (!cell){ cell = [0, 0, 0, 0]; m.set(k, cell); }
+      cell[0] += row[2] || 0; cell[1] += row[3] || 0; cell[2] += row[4] || 0; cell[3] += row[5] || 0;
+      for (let i = 0; i < 4; i++) if (cell[i] > maxes[i]) maxes[i] = cell[i];
     }
   }
   return { cell: finestCell * factor, map: m, maxes: maxes };
@@ -360,7 +362,7 @@ function cellAt(lod, ix, iy){ return lod ? (lod.map.get(ix + ',' + iy) || null) 
 function updateSelected(lod){
   const el = (id) => document.getElementById(id);
   if (!selected || !lod){
-    for (const id of ['selInst','selVerts','selDraws','selRank','selPct','selCenter','selSize']) el(id).textContent = '-';
+    for (const id of ['selInst','selVerts','selDraws','selLights','selRank','selPct','selCenter','selSize']) el(id).textContent = '-';
     el('selInspectMsg').style.display = 'none';
     el('selInspectList').innerHTML = '';
     el('selInUnreal').style.display = 'none';
@@ -370,10 +372,11 @@ function updateSelected(lod){
   el('selInUnreal').style.display = GOTO ? 'inline-block' : 'none';
   const cs = lod.cell;
   const ix = Math.floor(selected.wx/cs), iy = Math.floor(selected.wy/cs);
-  const cell = cellAt(lod, ix, iy) || [0, 0, 0];
+  const cell = cellAt(lod, ix, iy) || [0, 0, 0, 0];
   el('selInst').textContent = cell[0].toLocaleString();
   el('selVerts').textContent = cell[1].toLocaleString();
   el('selDraws').textContent = cell[2].toLocaleString();
+  el('selLights').textContent = (cell[3] || 0).toLocaleString();
   // rank by the currently selected metric (1 = highest). This is an O(cells) scan, so memoize it:
   // pan/zoom redraws every frame but the rank only changes when the cell, metric, or LOD changes.
   const val = cell[metricIdx];

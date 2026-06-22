@@ -8,6 +8,8 @@
 #include "Camera/CameraTypes.h"
 #include "Components/InstancedStaticMeshComponent.h"
 #include "Components/SceneCaptureComponent2D.h"
+#include "Components/LightComponent.h"
+#include "Components/LocalLightComponent.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/StaticMeshActor.h"
 #include "Engine/SceneCapture2D.h"
@@ -42,12 +44,13 @@ DEFINE_LOG_CATEGORY_STATIC(LogCameraProfilingEditor, Log, All);
 
 namespace
 {
-	/** Per-fine-cell accumulator: instance count, total triangles, draw-call estimate. */
+	/** Per-fine-cell accumulator: instance count, total triangles, draw-call estimate, light-overlap cost. */
 	struct FDensityBin
 	{
 		int32 Instances = 0;
 		double Triangles = 0.0;
 		int32 Draws = 0;
+		double Lights = 0.0;  // sum of weighted dynamic-light footprints covering this cell (overdraw cost)
 	};
 
 	/** Coarse clustering accumulator: centroid sums + count. */
@@ -289,6 +292,63 @@ FString FCameraProfilingTools::ExportSceneData()
 		}
 	}
 
+	// --- light cost pass ---
+	// Stamp each DYNAMIC local light's attenuation footprint (XY circle) into the fine grid so
+	// overlapping lights pile up: a cell lit by N lights costs ~N (overdraw), which is the real
+	// lighting expense. Static (baked) lights are skipped; Movable counts full, Stationary half;
+	// shadow-casters cost more (a point light's shadow is a cubemap ~ 6x a spot/rect's single map).
+	int32 LightCount = 0;
+	for (TActorIterator<AActor> It(World); It; ++It)
+	{
+		AActor* Actor = *It;
+		if (!Actor)
+		{
+			continue;
+		}
+		TInlineComponentArray<ULightComponent*> LightComps;
+		Actor->GetComponents(LightComps);
+		for (ULightComponent* LC : LightComps)
+		{
+			ULocalLightComponent* Local = Cast<ULocalLightComponent>(LC); // point/spot/rect (not directional)
+			if (!Local || !Local->bAffectsWorld)
+			{
+				continue;
+			}
+			double Weight;
+			switch (Local->Mobility)
+			{
+			case EComponentMobility::Movable:    Weight = 1.0; break;
+			case EComponentMobility::Stationary: Weight = 0.5; break;
+			default:                             continue; // Static -> baked, skip
+			}
+			if (Local->CastShadows)
+			{
+				Weight *= (Local->GetLightType() == LightType_Point) ? 6.0 : 2.0;
+			}
+			const double R = Local->AttenuationRadius;
+			if (R <= 0.0 || Weight <= 0.0)
+			{
+				continue;
+			}
+			++LightCount;
+			const FVector P = Local->GetComponentLocation();
+			const double R2 = R * R;
+			const int32 IxMin = FMath::FloorToInt((P.X - R) / FineCell), IxMax = FMath::FloorToInt((P.X + R) / FineCell);
+			const int32 IyMin = FMath::FloorToInt((P.Y - R) / FineCell), IyMax = FMath::FloorToInt((P.Y + R) / FineCell);
+			for (int32 ix = IxMin; ix <= IxMax; ++ix)
+			{
+				for (int32 iy = IyMin; iy <= IyMax; ++iy)
+				{
+					const double Dx = (ix + 0.5) * FineCell - P.X, Dy = (iy + 0.5) * FineCell - P.Y;
+					if (Dx * Dx + Dy * Dy <= R2)
+					{
+						FineBins.FindOrAdd(FIntPoint(ix, iy)).Lights += Weight;
+					}
+				}
+			}
+		}
+	}
+
 	if (PointCount == 0)
 	{
 		UE_LOG(LogCameraProfilingEditor, Warning, TEXT("[export] no mesh placements found in the level."));
@@ -417,7 +477,7 @@ FString FCameraProfilingTools::ExportSceneData()
 	W->WriteValue(TEXT("cell"), FineCell);
 	W->WriteValue(TEXT("base_cell"), CoarseCell);
 	W->WriteArrayStart(TEXT("metrics"));
-	W->WriteValue(TEXT("instances")); W->WriteValue(TEXT("triangles")); W->WriteValue(TEXT("draws"));
+	W->WriteValue(TEXT("instances")); W->WriteValue(TEXT("triangles")); W->WriteValue(TEXT("draws")); W->WriteValue(TEXT("lights"));
 	W->WriteArrayEnd();
 	W->WriteArrayStart(TEXT("bins"));
 	for (const TPair<FIntPoint, FDensityBin>& Pair : FineBins)
@@ -429,6 +489,7 @@ FString FCameraProfilingTools::ExportSceneData()
 		W->WriteValue(B.Instances);
 		W->WriteValue(B.Triangles);
 		W->WriteValue(B.Draws);
+		W->WriteValue(B.Lights);
 		W->WriteArrayEnd();
 	}
 	W->WriteArrayEnd();
@@ -449,8 +510,8 @@ FString FCameraProfilingTools::ExportSceneData()
 	double TotalTris = 0.0; int64 TotalDraws = 0;
 	for (const TPair<FIntPoint, FDensityBin>& Pair : FineBins) { TotalTris += Pair.Value.Triangles; TotalDraws += Pair.Value.Draws; }
 	UE_LOG(LogCameraProfilingEditor, Log,
-		TEXT("[export] %d actors, %d placements, %d clusters, %d navmesh volume(s); triangles=%.0f draws=%lld -> %s"),
-		ActorCount, PointCount, Clusters.Num(), NavVolumes.Num(), TotalTris, TotalDraws, *OutPath);
+		TEXT("[export] %d actors, %d placements, %d clusters, %d navmesh volume(s), %d dynamic light(s); triangles=%.0f draws=%lld -> %s"),
+		ActorCount, PointCount, Clusters.Num(), NavVolumes.Num(), LightCount, TotalTris, TotalDraws, *OutPath);
 	return OutPath;
 }
 
