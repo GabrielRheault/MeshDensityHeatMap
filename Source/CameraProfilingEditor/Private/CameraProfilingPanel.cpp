@@ -87,27 +87,21 @@ namespace
 						SNew(SVerticalBox)
 						+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 2.f)
 						[
-							ActionButton(LOCTEXT("Generate", "1. Generate Cameras"),
-								LOCTEXT("GenerateTip", "Export scene data + top-down render, build the grid at the resolution above, and spawn the cameras."),
+							ActionButton(LOCTEXT("Generate", "1. Generate Data (cameras + JSON)"),
+								LOCTEXT("GenerateTip", "Scan the level into scene_data.json (density incl. lights) + a top-down render, build the camera grid at the resolution above, and spawn the GridCam cameras."),
 								[]() { FCameraProfilingTools::GenerateCameras(0, 0); })
 						]
 						+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 2.f)
 						[
-							ActionButton(LOCTEXT("Profile", "2. Profile from Cameras"),
-								LOCTEXT("ProfileTip", "Run the per-camera trace + screenshot profiling pass."),
+							ActionButton(LOCTEXT("Profile", "2. Run Camera Profiling"),
+								LOCTEXT("ProfileTip", "Fly the view through the cameras: per-camera Unreal Insights trace + screenshot + frame timing."),
 								[]() { FCameraProfilingTools::ProfileFromCameras(); })
 						]
 						+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 2.f)
 						[
-							ActionButton(LOCTEXT("SeeMap", "3. See Density Map"),
-								LOCTEXT("SeeMapTip", "(Re)build and open the density heat map in the browser."),
+							ActionButton(LOCTEXT("OpenMap", "3. Open Heat Map"),
+								LOCTEXT("OpenMapTip", "Build and open the density heat map in your browser (from the latest generated/profiled data)."),
 								[]() { FCameraProfilingTools::WriteHeatmap(/*bOpenBrowser=*/true); })
-						]
-						+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 2.f)
-						[
-							ActionButton(LOCTEXT("Refresh", "Refresh Heat Map Data"),
-								LOCTEXT("RefreshTip", "Re-scan the level into the heat map without regenerating the cameras."),
-								[]() { FCameraProfilingTools::RefreshHeatmapData(); })
 						]
 					]
 				]
