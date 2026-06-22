@@ -232,10 +232,15 @@ camera_grid.json       resolved transforms of the CameraGrid-folder cameras + pr
 map_topdown.png/.json  top-down overlay image + the world AABB it covers
 density_heatmap.html   the heat map (open this)
 camera_traces.json     camera → trace/screenshot/fps manifest (written after profiling)
+diagnostics.txt        engine/world/settings + export/spawn summary of the last run (send this for support)
 screenshots/camera_###.png
 traces/camera_###.utrace
-history/<timestamp>/    archived copy of each Generate Data run (switch back to it from the panel)
+history/<timestamp>/    archived copy of each Generate Data run (switch back to it from the heat map)
 ```
+
+> **Reporting a problem?** Send **`diagnostics.txt`** (and the browser console if the heat map misbehaves)
+> — it has the engine/world/settings and the export/spawn results, which is usually enough to diagnose
+> without the level. It's rewritten by every **Generate Data**.
 
 ## Building from source
 

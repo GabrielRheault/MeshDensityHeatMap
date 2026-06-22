@@ -121,31 +121,51 @@ namespace
 		return ProjectNav(World, FVector(X, Y, Z), FVector(50.0, 50.0, ToleranceZ), Unused);
 	}
 
-	/** Log a self-contained context block (engine/plugin/world/settings) so a user's Output Log alone is
-	 *  enough to diagnose most issues -- no need to send the whole level. */
+	// Accumulates the [diag]/[export]/[spawn] lines so GenerateData can also dump them to a single
+	// diagnostics.txt a user can send instead of the whole level. Reset at the start of each run.
+	FString GDiag;
+	void Diag(const FString& Line)
+	{
+		UE_LOG(LogCameraProfilingEditor, Log, TEXT("%s"), *Line);
+		GDiag += Line; GDiag += LINE_TERMINATOR;
+	}
+	void DiagWarn(const FString& Line)
+	{
+		UE_LOG(LogCameraProfilingEditor, Warning, TEXT("%s"), *Line);
+		GDiag += Line; GDiag += LINE_TERMINATOR;
+	}
+
+	/** Log a self-contained context block (engine/plugin/world/settings) so a user's Output Log (or the
+	 *  diagnostics.txt) alone is enough to diagnose most issues -- no need to send the whole level. */
 	void LogDiagnostics(UWorld* World)
 	{
 		const UCameraProfilingSettings* S = GetDefault<UCameraProfilingSettings>();
-		UE_LOG(LogCameraProfilingEditor, Log, TEXT("[diag] ---- Camera Profiling ---- built %s %s, engine %s"),
-			TEXT(__DATE__), TEXT(__TIME__), *FEngineVersion::Current().ToString());
+		Diag(FString::Printf(TEXT("[diag] ---- Camera Profiling ---- built %s %s, engine %s"),
+			TEXT(__DATE__), TEXT(__TIME__), *FEngineVersion::Current().ToString()));
 		if (World)
 		{
-			UE_LOG(LogCameraProfilingEditor, Log, TEXT("[diag] world '%s' (WorldType=%d, WorldPartition=%s, NavSystem=%s)"),
+			Diag(FString::Printf(TEXT("[diag] world '%s' (WorldType=%d, WorldPartition=%s, NavSystem=%s)"),
 				*World->GetMapName(), (int32)World->WorldType,
 				World->GetWorldPartition() ? TEXT("yes") : TEXT("no"),
-				NavSystem(World) ? TEXT("present") : TEXT("absent"));
+				NavSystem(World) ? TEXT("present") : TEXT("absent")));
 		}
 		else
 		{
-			UE_LOG(LogCameraProfilingEditor, Warning, TEXT("[diag] NO editor world."));
+			DiagWarn(TEXT("[diag] NO editor world."));
 		}
 		const TCHAR* BoundsName = (S->BoundsSource == ECameraBoundsSource::WorldPartition) ? TEXT("WorldPartition")
 			: (S->BoundsSource == ECameraBoundsSource::NavMesh) ? TEXT("NavMesh") : TEXT("Scene");
-		UE_LOG(LogCameraProfilingEditor, Log,
+		Diag(FString::Printf(
 			TEXT("[diag] settings: BoundsSource=%s Grid=%dx%d Padding=%.2f Jitter=%.2f Aim=%d Height=%.0f Trace=+%.0f/-%.0f Subdiv=%d ClusterCell=%.0f ExportInstances=%d ProfileMode=%s GotoPort=%d"),
 			BoundsName, S->GridResolution.X, S->GridResolution.Y, S->Padding, S->Jitter, S->bAimAtClusters ? 1 : 0,
 			S->HeightAboveGround, S->TraceExtraHeight, S->TraceDepth, S->HeatmapSubdiv, S->ClusterCellSize,
-			S->bExportInstances ? 1 : 0, (S->ProfileMode == ECameraProfileMode::PIE) ? TEXT("PIE") : TEXT("Editor"), S->GotoPort);
+			S->bExportInstances ? 1 : 0, (S->ProfileMode == ECameraProfileMode::PIE) ? TEXT("PIE") : TEXT("Editor"), S->GotoPort));
+	}
+
+	/** Write the accumulated diagnostics to <data>/diagnostics.txt (a single file to send for support). */
+	void FlushDiagnostics(const FString& DataDir)
+	{
+		FFileHelper::SaveStringToFile(GDiag, *FPaths::Combine(DataDir, TEXT("diagnostics.txt")));
 	}
 }
 
@@ -646,13 +666,13 @@ FString FCameraProfilingTools::ExportSceneData()
 
 	double TotalTris = 0.0; int64 TotalDraws = 0;
 	for (const TPair<FIntPoint, FDensityBin>& Pair : FineBins) { TotalTris += Pair.Value.Triangles; TotalDraws += Pair.Value.Draws; }
-	UE_LOG(LogCameraProfilingEditor, Log,
-		TEXT("[export] %d actors, %d placements, %d clusters, %d navmesh volume(s), %d dynamic light(s); triangles=%.0f draws=%lld -> %s"),
-		ActorCount, PointCount, Clusters.Num(), NavVolumes.Num(), LightCount, TotalTris, TotalDraws, *OutPath);
-	UE_LOG(LogCameraProfilingEditor, Log,
+	Diag(FString::Printf(
+		TEXT("[export] %d actors, %d placements, %d clusters, %d navmesh volume(s), %d dynamic light(s); triangles=%.0f draws=%lld"),
+		ActorCount, PointCount, Clusters.Num(), NavVolumes.Num(), LightCount, TotalTris, TotalDraws));
+	Diag(FString::Printf(
 		TEXT("[export] bounds min=(%.0f,%.0f,%.0f) max=(%.0f,%.0f,%.0f); content X[%.0f,%.0f] Y[%.0f,%.0f]; WorldPartition=%s"),
 		MinB[0], MinB[1], MinB[2], MaxB[0], MaxB[1], MaxB[2],
-		ContentMin[0], ContentMax[0], ContentMin[1], ContentMax[1], bHasWP ? TEXT("yes") : TEXT("no"));
+		ContentMin[0], ContentMax[0], ContentMin[1], ContentMax[1], bHasWP ? TEXT("yes") : TEXT("no")));
 	return OutPath;
 }
 
@@ -1087,10 +1107,10 @@ int32 FCameraProfilingTools::SpawnCameras()
 			++Skipped;
 			// Diagnose WHY: did the down-trace hit any collision at all under this point?
 			const bool bGroundHit = ResolveGroundZ(World, X, Y, NominalZ).IsSet();
-			UE_LOG(LogCameraProfilingEditor, Warning, TEXT("[spawn] camera %d near (%.0f,%.0f) skipped: %s"),
+			DiagWarn(FString::Printf(TEXT("[spawn] camera %d near (%.0f,%.0f) skipped: %s"),
 				Idx, X, Y,
 				bGroundHit ? TEXT("ground hit but off-navmesh (only happens in NavMesh bounds mode)")
-				           : TEXT("down-trace hit NO collision under this point (geometry likely has collision disabled)"));
+				           : TEXT("down-trace hit NO collision under this point (geometry likely has collision disabled)")));
 			++Idx;
 			continue;
 		}
@@ -1135,15 +1155,18 @@ int32 FCameraProfilingTools::SpawnCameras()
 	W->Close();
 	FFileHelper::SaveStringToFile(GridJson, *FPaths::Combine(DataDir(), TEXT("camera_grid.json")));
 
-	UE_LOG(LogCameraProfilingEditor, Log, TEXT("[spawn] spawned %d cameras (%d nudged), skipped %d."), Spawned, Nudged, Skipped);
+	Diag(FString::Printf(TEXT("[spawn] spawned %d cameras (%d nudged), skipped %d."), Spawned, Nudged, Skipped));
 	return Spawned;
 }
 
 void FCameraProfilingTools::GenerateData(int32 GridX, int32 GridY)
 {
+	GDiag.Reset(); // start a fresh diagnostics capture for this run (ExportSceneData logs the [diag] block)
+
 	// Always refresh the scanned data (density incl. lights + top-down render).
 	if (ExportSceneData().IsEmpty())
 	{
+		FlushDiagnostics(DataDir());
 		return;
 	}
 	CaptureTopdown();
@@ -1163,15 +1186,18 @@ void FCameraProfilingTools::GenerateData(int32 GridX, int32 GridY)
 	}
 	if (Existing > 0)
 	{
-		UE_LOG(LogCameraProfilingEditor, Log,
+		Diag(FString::Printf(
 			TEXT("[generate] %d camera(s) already in '%s'; kept (data refreshed only). Delete them to lay out a new grid."),
-			Existing, *S->OutlinerFolder);
+			Existing, *S->OutlinerFolder));
 	}
 	else if (!GenerateCameraGrid(GridX, GridY).IsEmpty())
 	{
 		SpawnCameras();
 	}
 
-	// Archive this generation so you can switch back to it later (panel "History" dropdown).
+	// Archive this generation so you can switch back to it later (Generation dropdown in the heat map).
 	SnapshotGeneration();
+
+	// Single-file diagnostics a user can send for support (same lines as the [diag]/[export]/[spawn] log).
+	FlushDiagnostics(DataDir());
 }
