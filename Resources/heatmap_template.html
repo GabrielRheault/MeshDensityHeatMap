@@ -60,10 +60,10 @@
     <div class="stat">World Y: <b id="sY">-</b></div>
     <div style="height:14px"></div>
     <div class="stat" style="color:#d6d9dd"><b>Selected cell</b> &nbsp;<span style="color:#9aa0a8">(click a cell)</span></div>
-    <div class="stat">Instances: <b id="selInst">-</b></div>
-    <div class="stat">Triangles: <b id="selVerts">-</b></div>
-    <div class="stat">Draw calls (est.): <b id="selDraws">-</b></div>
-    <div class="stat">Lights (overlap): <b id="selLights">-</b></div>
+    <div class="stat" id="rowInst">Instances: <b id="selInst">-</b></div>
+    <div class="stat" id="rowVerts">Triangles: <b id="selVerts">-</b></div>
+    <div class="stat" id="rowDraws">Draw calls (est.): <b id="selDraws">-</b></div>
+    <div class="stat" id="rowLights">Lights (overlap): <b id="selLights">-</b></div>
     <div class="stat">Rank (this metric): <b id="selRank">-</b></div>
     <div class="stat">% of densest: <b id="selPct">-</b></div>
     <div class="stat">Center (X, Y): <b id="selCenter">-</b></div>
@@ -361,6 +361,8 @@ function cellAt(lod, ix, iy){ return lod ? (lod.map.get(ix + ',' + iy) || null) 
 
 function updateSelected(lod){
   const el = (id) => document.getElementById(id);
+  // Show only the metric row matching the active metric (instances/triangles/draws/lights).
+  ['rowInst','rowVerts','rowDraws','rowLights'].forEach((id, i) => el(id).style.display = (i === metricIdx) ? '' : 'none');
   if (!selected || !lod){
     for (const id of ['selInst','selVerts','selDraws','selLights','selRank','selPct','selCenter','selSize']) el(id).textContent = '-';
     el('selInspectMsg').style.display = 'none';
