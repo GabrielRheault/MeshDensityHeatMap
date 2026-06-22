@@ -109,9 +109,16 @@ cbLog.checked = !!opts.log;
 cbCam.checked = opts.show_cameras !== false && (DATA.cameras||[]).length > 0;
 cbNav.checked = opts.show_navmesh !== false && (DATA.navmesh||[]).length > 0;
 
-let metricIdx = 0;  // 0 = instances, 1 = vertices, 2 = draws
 const metricSel = document.getElementById('metricSel');
 const METRIC_LABELS = ['Instances', 'Triangles', 'Draw calls', 'Lights'];
+// Metric persists across a Generation switch (which reloads the page). sessionStorage survives the
+// reload; fall back to the (possibly browser-restored) <select> value. Without this the map rendered
+// metric 0 (Instances) while the dropdown still showed your prior choice.
+let metricIdx = 0;
+try { const s = sessionStorage.getItem('cp_metric'); metricIdx = s !== null ? +s : (+metricSel.value || 0); }
+catch (e) { metricIdx = +metricSel.value || 0; }
+if (!(metricIdx >= 0 && metricIdx <= 3)) { metricIdx = 0; }
+metricSel.value = String(metricIdx);
 // Old scene_data.json only had [ix,iy,instances]; if there's no metrics list, vertices/draws are 0.
 const hasMetrics = !!(DATA.density && DATA.density.metrics);
 
@@ -562,7 +569,11 @@ function runInspect(){
 
 [cbLog, cbCam, cbNav, cbMap].forEach(cb => cb.addEventListener('change', draw));
 cbMap.addEventListener('change', ensureMapLoaded);  // load the background image on first toggle
-metricSel.addEventListener('change', () => { metricIdx = +metricSel.value; draw(); });
+metricSel.addEventListener('change', () => {
+  metricIdx = +metricSel.value;
+  try { sessionStorage.setItem('cp_metric', metricIdx); } catch (e) {}
+  draw();
+});
 heatOp.addEventListener('input', draw);
 document.getElementById('selInUnreal').addEventListener('click', runInspect);
 
