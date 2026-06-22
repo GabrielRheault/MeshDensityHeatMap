@@ -297,6 +297,10 @@ FString FCameraProfilingTools::ExportSceneData()
 	// overlapping lights pile up: a cell lit by N lights costs ~N (overdraw), which is the real
 	// lighting expense. Static (baked) lights are skipped; Movable counts full, Stationary half;
 	// shadow-casters cost more (a point light's shadow is a cubemap ~ 6x a spot/rect's single map).
+	// Stamping is clamped to the mesh-content bounds so one large-radius light can't balloon the grid
+	// (and scene_data.json) with hundreds of thousands of cells far outside the visible map.
+	const int32 BIxMin = FMath::FloorToInt(MinB[0] / FineCell), BIxMax = FMath::FloorToInt(MaxB[0] / FineCell);
+	const int32 BIyMin = FMath::FloorToInt(MinB[1] / FineCell), BIyMax = FMath::FloorToInt(MaxB[1] / FineCell);
 	int32 LightCount = 0;
 	for (TActorIterator<AActor> It(World); It; ++It)
 	{
@@ -333,8 +337,10 @@ FString FCameraProfilingTools::ExportSceneData()
 			++LightCount;
 			const FVector P = Local->GetComponentLocation();
 			const double R2 = R * R;
-			const int32 IxMin = FMath::FloorToInt((P.X - R) / FineCell), IxMax = FMath::FloorToInt((P.X + R) / FineCell);
-			const int32 IyMin = FMath::FloorToInt((P.Y - R) / FineCell), IyMax = FMath::FloorToInt((P.Y + R) / FineCell);
+			const int32 IxMin = FMath::Max(BIxMin, FMath::FloorToInt((P.X - R) / FineCell));
+			const int32 IxMax = FMath::Min(BIxMax, FMath::FloorToInt((P.X + R) / FineCell));
+			const int32 IyMin = FMath::Max(BIyMin, FMath::FloorToInt((P.Y - R) / FineCell));
+			const int32 IyMax = FMath::Min(BIyMax, FMath::FloorToInt((P.Y + R) / FineCell));
 			for (int32 ix = IxMin; ix <= IxMax; ++ix)
 			{
 				for (int32 iy = IyMin; iy <= IyMax; ++iy)
