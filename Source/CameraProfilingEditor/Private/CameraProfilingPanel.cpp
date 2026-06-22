@@ -12,6 +12,7 @@
 #include "Widgets/Docking/SDockTab.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/Input/SButton.h"
+#include "Widgets/Input/SComboBox.h"
 #include "Widgets/Text/STextBlock.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Styling/AppStyle.h"
@@ -50,8 +51,30 @@ namespace
 			];
 	}
 
+	// --- Generation history dropdown state ---
+	TArray<TSharedPtr<FString>> GSnapshots;            // timestamp folder names (newest first)
+	TSharedPtr<FString> GSelectedSnapshot;             // current dropdown selection
+	TSharedPtr<SComboBox<TSharedPtr<FString>>> GSnapshotCombo;
+
+	void RefreshSnapshots()
+	{
+		GSnapshots.Reset();
+		for (const FString& Name : FCameraProfilingTools::ListSnapshots())
+		{
+			GSnapshots.Add(MakeShared<FString>(Name));
+		}
+		if (!GSelectedSnapshot.IsValid() || !GSnapshots.ContainsByPredicate(
+			[](const TSharedPtr<FString>& S) { return S.IsValid() && GSelectedSnapshot.IsValid() && *S == *GSelectedSnapshot; }))
+		{
+			GSelectedSnapshot = GSnapshots.Num() > 0 ? GSnapshots[0] : nullptr;
+		}
+		if (GSnapshotCombo.IsValid()) { GSnapshotCombo->RefreshOptions(); }
+	}
+
 	TSharedRef<SDockTab> SpawnPanelTab(const FSpawnTabArgs&)
 	{
+		RefreshSnapshots(); // populate the history dropdown before building it
+
 		// Details view bound to the settings CDO -> auto-generates the right widget per property
 		// (grid resolution, the Bounds Source dropdown, height above ground, etc.).
 		FPropertyEditorModule& PropertyEditor = FModuleManager::LoadModuleChecked<FPropertyEditorModule>(TEXT("PropertyEditor"));
@@ -102,6 +125,35 @@ namespace
 							ActionButton(LOCTEXT("OpenMap", "3. Open Heat Map"),
 								LOCTEXT("OpenMapTip", "Build and open the density heat map in your browser (from the latest generated/profiled data)."),
 								[]() { FCameraProfilingTools::WriteHeatmap(/*bOpenBrowser=*/true); })
+						]
+
+						// History: switch the current data to a past generation, then reopen its heat map.
+						+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 8.f, 0.f, 2.f)
+						[
+							SNew(STextBlock).Text(LOCTEXT("HistoryLabel", "History — switch to a past generation:"))
+						]
+						+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 2.f)
+						[
+							SNew(SHorizontalBox)
+							+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
+							[
+								SAssignNew(GSnapshotCombo, SComboBox<TSharedPtr<FString>>)
+								.OptionsSource(&GSnapshots)
+								.OnComboBoxOpening_Lambda([]() { RefreshSnapshots(); })
+								.OnGenerateWidget_Lambda([](TSharedPtr<FString> In)
+									{ return SNew(STextBlock).Text(FText::FromString(In.IsValid() ? *In : FString())); })
+								.OnSelectionChanged_Lambda([](TSharedPtr<FString> In, ESelectInfo::Type) { GSelectedSnapshot = In; })
+								[
+									SNew(STextBlock).Text_Lambda([]()
+										{ return FText::FromString(GSelectedSnapshot.IsValid() ? *GSelectedSnapshot : FString(TEXT("(no generations yet)"))); })
+								]
+							]
+							+ SHorizontalBox::Slot().AutoWidth().Padding(4.f, 0.f, 0.f, 0.f)
+							[
+								ActionButton(LOCTEXT("LoadSnap", "Load"),
+									LOCTEXT("LoadSnapTip", "Restore the selected generation's JSON + top-down image as the current data and reopen its heat map."),
+									[]() { if (GSelectedSnapshot.IsValid()) { FCameraProfilingTools::LoadSnapshot(*GSelectedSnapshot); } })
+							]
 						]
 					]
 				]

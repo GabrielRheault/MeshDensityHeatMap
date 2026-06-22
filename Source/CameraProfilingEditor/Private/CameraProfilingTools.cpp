@@ -132,6 +132,67 @@ FString FCameraProfilingTools::DataDir()
 	return Dir;
 }
 
+FString FCameraProfilingTools::HistoryRoot()
+{
+	return FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("CameraProfiling/history"));
+}
+
+namespace
+{
+	// The files a "generation" produces; archived together and restored together.
+	const TCHAR* GGenerationFiles[] = {
+		TEXT("scene_data.json"), TEXT("camera_positions.json"), TEXT("camera_grid.json"),
+		TEXT("map_topdown.png"), TEXT("map_topdown.json")
+	};
+}
+
+void FCameraProfilingTools::SnapshotGeneration()
+{
+	IFileManager& FM = IFileManager::Get();
+	const FString Src = DataDir();
+	const FString Stamp = FDateTime::Now().ToString(TEXT("%Y-%m-%d_%H-%M-%S"));
+	const FString Dest = FPaths::Combine(HistoryRoot(), Stamp);
+	FM.MakeDirectory(*Dest, /*Tree=*/true);
+
+	int32 Copied = 0;
+	for (const TCHAR* F : GGenerationFiles)
+	{
+		const FString S = FPaths::Combine(Src, F);
+		if (FM.FileExists(*S) && FM.Copy(*FPaths::Combine(Dest, F), *S) == COPY_OK) { ++Copied; }
+	}
+	UE_LOG(LogCameraProfilingEditor, Log, TEXT("[history] archived generation '%s' (%d files) -> %s"),
+		*Stamp, Copied, *Dest);
+}
+
+TArray<FString> FCameraProfilingTools::ListSnapshots()
+{
+	TArray<FString> Dirs;
+	IFileManager::Get().FindFiles(Dirs, *FPaths::Combine(HistoryRoot(), TEXT("*")), /*Files=*/false, /*Directories=*/true);
+	Dirs.Sort([](const FString& A, const FString& B) { return A > B; }); // timestamp names sort newest-first
+	return Dirs;
+}
+
+bool FCameraProfilingTools::LoadSnapshot(const FString& Name)
+{
+	IFileManager& FM = IFileManager::Get();
+	const FString Src = FPaths::Combine(HistoryRoot(), Name);
+	if (!FM.DirectoryExists(*Src))
+	{
+		UE_LOG(LogCameraProfilingEditor, Warning, TEXT("[history] snapshot '%s' not found."), *Name);
+		return false;
+	}
+	const FString Dst = DataDir();
+	int32 Copied = 0;
+	for (const TCHAR* F : GGenerationFiles)
+	{
+		const FString S = FPaths::Combine(Src, F);
+		if (FM.FileExists(*S) && FM.Copy(*FPaths::Combine(Dst, F), *S) == COPY_OK) { ++Copied; }
+	}
+	UE_LOG(LogCameraProfilingEditor, Log, TEXT("[history] restored generation '%s' (%d files); rebuilding heat map."),
+		*Name, Copied);
+	return WriteHeatmap(/*bOpenBrowser=*/true);
+}
+
 TOptional<double> FCameraProfilingTools::ResolveGroundZ(UWorld* World, double X, double Y, double NominalZ)
 {
 	const UCameraProfilingSettings* S = GetDefault<UCameraProfilingSettings>();
@@ -1031,12 +1092,12 @@ void FCameraProfilingTools::GenerateData(int32 GridX, int32 GridY)
 		UE_LOG(LogCameraProfilingEditor, Log,
 			TEXT("[generate] %d camera(s) already in '%s'; kept (data refreshed only). Delete them to lay out a new grid."),
 			Existing, *S->OutlinerFolder);
-		return;
+	}
+	else if (!GenerateCameraGrid(GridX, GridY).IsEmpty())
+	{
+		SpawnCameras();
 	}
 
-	if (GenerateCameraGrid(GridX, GridY).IsEmpty())
-	{
-		return;
-	}
-	SpawnCameras();
+	// Archive this generation so you can switch back to it later (panel "History" dropdown).
+	SnapshotGeneration();
 }

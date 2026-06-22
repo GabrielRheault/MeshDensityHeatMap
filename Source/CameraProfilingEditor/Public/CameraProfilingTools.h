@@ -58,6 +58,19 @@ public:
 	 *  so the unified per-camera profiler runs (trace + screenshot per camera). */
 	static void ProfileFromCameras();
 
+	// --- Generation history ---
+	/** <ProjectSaved>/CameraProfiling/history — one timestamped subfolder per Generate Data run. */
+	static FString HistoryRoot();
+
+	/** Archive the current generation's data files into history/<timestamp>/ (called by GenerateData). */
+	static void SnapshotGeneration();
+
+	/** Timestamp folder names of past generations, newest first. */
+	static TArray<FString> ListSnapshots();
+
+	/** Restore a past generation's files as the current data set and (re)open its heat map. */
+	static bool LoadSnapshot(const FString& Name);
+
 private:
 	/** The editor world, or nullptr. */
 	static UWorld* EditorWorld();
