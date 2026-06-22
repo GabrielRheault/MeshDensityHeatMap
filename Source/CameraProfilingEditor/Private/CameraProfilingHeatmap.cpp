@@ -69,24 +69,46 @@ bool FCameraProfilingTools::WriteHeatmap(bool bOpenBrowser)
 		return false;
 	}
 
-	// Cameras: prefer the profiling manifest (camera_traces.json) when it's at least as new as
-	// camera_positions.json; otherwise use the planned grid.
+	// Camera markers come ONLY from our generated/folder cameras (never arbitrary scene cameras):
+	// prefer the profiling manifest (camera_traces.json -- has screenshots/traces/fps) when it's at
+	// least as new as the spawned-grid file; otherwise use camera_grid.json (the ACTUAL GridCam_*
+	// cameras in the CameraGrid folder). camera_positions.json (the pre-spawn PLANNED grid, which can
+	// include cells that failed to spawn) is only a last-resort fallback when no grid file exists.
 	const FString ManifestPath = FPaths::Combine(Dir, TEXT("camera_traces.json"));
+	const FString GridPath = FPaths::Combine(Dir, TEXT("camera_grid.json"));
 	const FString PositionsPath = FPaths::Combine(Dir, TEXT("camera_positions.json"));
 	IFileManager& FM = IFileManager::Get();
 	const bool bHaveManifest = FM.FileExists(*ManifestPath);
-	const bool bHavePositions = FM.FileExists(*PositionsPath);
-	const bool bUseManifest = bHaveManifest && (!bHavePositions ||
-		FM.GetTimeStamp(*ManifestPath) >= FM.GetTimeStamp(*PositionsPath));
+	const FString GridSource = FM.FileExists(*GridPath) ? GridPath : PositionsPath;
+	const bool bHaveGrid = FM.FileExists(*GridSource);
+	const bool bUseManifest = bHaveManifest && (!bHaveGrid ||
+		FM.GetTimeStamp(*ManifestPath) >= FM.GetTimeStamp(*GridSource));
 
 	TArray<TSharedPtr<FJsonValue>> Cameras;
-	if (bUseManifest || bHavePositions)
+	if (bUseManifest || bHaveGrid)
 	{
-		TSharedPtr<FJsonObject> CamObj = LoadJsonObject(bUseManifest ? ManifestPath : PositionsPath);
+		TSharedPtr<FJsonObject> CamObj = LoadJsonObject(bUseManifest ? ManifestPath : GridSource);
 		const TArray<TSharedPtr<FJsonValue>>* Arr = nullptr;
 		if (CamObj.IsValid() && CamObj->TryGetArrayField(TEXT("cameras"), Arr) && Arr)
 		{
 			Cameras = *Arr;
+		}
+	}
+
+	// Make screenshot/trace paths absolute: they're stored project-relative (../../..), which a
+	// file:// page can't resolve -- that's why the screenshot thumbnail wasn't showing, and why a
+	// copied trace path wouldn't open in Unreal Insights.
+	for (const TSharedPtr<FJsonValue>& CamVal : Cameras)
+	{
+		const TSharedPtr<FJsonObject> Obj = CamVal->AsObject();
+		if (!Obj.IsValid()) { continue; }
+		for (const TCHAR* Field : { TEXT("screenshot"), TEXT("trace") })
+		{
+			FString P;
+			if (Obj->TryGetStringField(Field, P) && !P.IsEmpty())
+			{
+				Obj->SetStringField(Field, FPaths::ConvertRelativePathToFull(P));
+			}
 		}
 	}
 
