@@ -744,32 +744,44 @@ FString FCameraProfilingTools::GenerateCameraGrid(int32 GridX, int32 GridY)
 	// height fails on maps whose ground sits far from 0 (e.g. Electric Dreams). Overwritten by the hit.
 	const double Z = BMax[2];
 
-	// Cluster centers for aiming.
-	TArray<FVector2D> ClusterXY;
+	// Cluster centers + weights for density-weighted aiming.
+	struct FAimCluster { double X, Y, W; };
+	TArray<FAimCluster> AimClusters;
 	const TArray<TSharedPtr<FJsonValue>>* ClustersJson = nullptr;
 	if (Scene->TryGetArrayField(TEXT("clusters"), ClustersJson) && ClustersJson)
 	{
 		for (const TSharedPtr<FJsonValue>& C : *ClustersJson)
 		{
-			const TArray<TSharedPtr<FJsonValue>> Ctr = C->AsObject()->GetArrayField(TEXT("center"));
-			ClusterXY.Emplace(Ctr[0]->AsNumber(), Ctr[1]->AsNumber());
+			const TSharedPtr<FJsonObject> Obj = C->AsObject();
+			const TArray<TSharedPtr<FJsonValue>> Ctr = Obj->GetArrayField(TEXT("center"));
+			double W = 1.0; Obj->TryGetNumberField(TEXT("weight"), W);
+			AimClusters.Add({ Ctr[0]->AsNumber(), Ctr[1]->AsNumber(), FMath::Max(0.0, W) });
 		}
 	}
-	const bool bAim = S->bAimAtClusters && ClusterXY.Num() > 0;
+	const bool bAim = S->bAimAtClusters && AimClusters.Num() > 0;
 	const double AimFrac = FMath::Clamp((double)S->AimFraction, 0.0, 1.0);
 
 	FRandomStream Rng(S->RandomSeed);
 
-	auto YawToNearestCluster = [&](double Px, double Py) -> double
+	// Density-weighted aim: every cluster "pulls" the camera's facing toward it, weighted by its asset
+	// count and a distance falloff (reach ~1/4 of the map). Summing the pulls aims the camera at the
+	// local density concentration (the heat map's hot zone) instead of just whichever cell it sits in.
+	// Returns unset when the pull cancels out (uniform/symmetric density) so the caller keeps base yaw.
+	const double AimReach2 = FMath::Max(1.0, FMath::Square(0.25 * FMath::Max(SpanX, SpanY)));
+	auto YawToDensity = [&](double Px, double Py) -> TOptional<double>
 	{
-		double BestD2 = TNumericLimits<double>::Max();
-		FVector2D Best(Px, Py);
-		for (const FVector2D& C : ClusterXY)
+		double SumX = 0.0, SumY = 0.0;
+		for (const FAimCluster& C : AimClusters)
 		{
-			const double D2 = FMath::Square(C.X - Px) + FMath::Square(C.Y - Py);
-			if (D2 < BestD2) { BestD2 = D2; Best = C; }
+			const double Dx = C.X - Px, Dy = C.Y - Py;
+			const double D2 = Dx * Dx + Dy * Dy;
+			if (D2 < 1.0) { continue; } // cluster essentially under the camera -> no usable direction
+			const double Falloff = 1.0 / (1.0 + D2 / AimReach2);
+			const double WF = C.W * Falloff / FMath::Sqrt(D2); // unit direction * weighted falloff
+			SumX += Dx * WF; SumY += Dy * WF;
 		}
-		return FMath::RadiansToDegrees(FMath::Atan2(Best.Y - Py, Best.X - Px));
+		if (SumX * SumX + SumY * SumY < KINDA_SMALL_NUMBER) { return TOptional<double>(); }
+		return FMath::RadiansToDegrees(FMath::Atan2(SumY, SumX));
 	};
 
 	// Build the JSON.
@@ -799,7 +811,11 @@ FString FCameraProfilingTools::GenerateCameraGrid(int32 GridX, int32 GridY)
 			if (bUseNav && !InsideNavmesh(Px, Py)) { ++Dropped; continue; }
 
 			double Yaw = S->BaseRotation.Yaw;
-			if (bAim && Rng.FRand() < AimFrac) { Yaw = YawToNearestCluster(Px, Py); }
+			if (bAim && Rng.FRand() < AimFrac)
+			{
+				const TOptional<double> D = YawToDensity(Px, Py);
+				if (D.IsSet()) { Yaw = D.GetValue(); }
+			}
 			Cams.Emplace(Px, Py, S->BaseRotation.Pitch, Yaw, S->BaseRotation.Roll);
 			++CamCount;
 		}
