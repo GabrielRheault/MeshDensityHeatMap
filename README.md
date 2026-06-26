@@ -12,6 +12,9 @@ It ships as **two C++ modules** in one plugin:
 
 The heat map is a self-contained HTML file you open in any browser — no server, no install.
 
+<img width="1304" height="639" alt="image" src="https://github.com/user-attachments/assets/9b862cc1-ce6a-4c60-bd18-9b3ae82ced40" />
+
+
 ---
 
 ## Table of contents
@@ -53,13 +56,14 @@ The heat map is a self-contained HTML file you open in any browser — no server
 **Tools → Camera Profiling** opens a dockable **panel** that holds every setting (grid size, Bounds
 Source, placement, heat-map, profiling) and three action buttons:
 
-```
-Camera Profiling panel
-├── … all settings (also in Project Settings → Yes Chef → Camera Profiling) …
-├── 1. Generate Data (cameras + JSON)
-├── 2. Run Camera Profiling
-└── 3. Open Heat Map
-```
+<img width="247" height="953" alt="image" src="https://github.com/user-attachments/assets/f5010e7d-4310-43c4-bb76-4dec136c98d1" />
+
+
+
+
+
+<img width="761" height="800" alt="image" src="https://github.com/user-attachments/assets/e1c59ce2-873c-4799-86ae-5a06659a46f8" />
+
 
 Every **Generate Data** run is archived to `data/history/<timestamp>/`, so you build up a log of
 generations. You switch between them **from the heat map itself**, via the **Generation** dropdown (see
@@ -188,6 +192,9 @@ rank, % of densest, center, and cell size. A **See in Unreal** button then selec
 select the whole foliage actor) and lists the heaviest meshes, each tagged with its **LOD count** (or
 **Nanite**, which does continuous LOD at runtime).
 
+<img width="1671" height="846" alt="image" src="https://github.com/user-attachments/assets/ff38531c-e8fd-422a-b438-7689c42d7eb2" />
+
+
 **Click a camera dot** → its frame rate (after profiling), screenshot thumbnail, and `.utrace` path to
 copy into Unreal Insights, plus a **Go to this camera in editor** button that snaps the level viewport to
 that camera's exact transform.
@@ -201,7 +208,7 @@ that camera's exact transform.
 
 ## Settings
 
-**Project Settings → Yes Chef → Camera Profiling** (`UCameraProfilingSettings`), or the panel. Highlights:
+**Project Settings → Tools → Camera Profiling** (`UCameraProfilingSettings`), or the panel. Highlights:
 
 | Setting | Default | Notes |
 |---------|---------|-------|
